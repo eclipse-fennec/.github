@@ -31,6 +31,8 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | Project | Description |
 | --- | --- |
 | [model.atlas](https://github.com/eclipse-fennec/model.atlas) | Fennec Model Atlas — a distributed EMF model registry and repository service. |
+| [data.atlas](https://github.com/eclipse-fennec/data.atlas) | Fennec Data Atlas — data management service built on the Fennec stack. |
+| [dcat.atlas](https://github.com/eclipse-fennec/dcat.atlas) | Fennec DCAT-AP open data portal. |
 
 ### ☕ Java / OSGi Core
 
@@ -39,6 +41,7 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [emf.osgi](https://github.com/eclipse-fennec/emf.osgi) | OSGi extension for EMF — dynamic model and package registries. |
 | [emf.util](https://github.com/eclipse-fennec/emf.util) | Utilities and commons for Fennec EMF OSGi. |
 | [emf.codec](https://github.com/eclipse-fennec/emf.codec) | Jackson 3 based EMF serializer / de-serializer. |
+| [emf.odata](https://github.com/eclipse-fennec/emf.odata) | OData protocol support for EMF models. |
 | [emf.m2x](https://github.com/eclipse-fennec/emf.m2x) | EMF validation, transformation and generation. |
 | [emf.persistence-jpa](https://github.com/eclipse-fennec/emf.persistence-jpa) | EMF JPA-like persistence using EclipseLink. |
 | [emf.editors](https://github.com/eclipse-fennec/emf.editors) | Custom EMF Eclipse editors. |
@@ -61,6 +64,13 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [ocl.langium](https://github.com/eclipse-fennec/ocl.langium) | OCL grammar built with Langium. |
 | [ocl.lsp.worker](https://github.com/eclipse-fennec/ocl.lsp.worker) | OCL Langium language-server worker. |
 | [ocl.model](https://github.com/eclipse-fennec/ocl.model) | OCL model definitions. |
+
+### 🐍 Python Stack
+
+| Project | Description |
+| --- | --- |
+| [emf.py](https://github.com/eclipse-fennec/emf.py) | EMF implementation for Python. |
+| [emf.py.codegen](https://github.com/eclipse-fennec/emf.py.codegen) | EMF code generation for Python. |
 
 ## Documentation
 
