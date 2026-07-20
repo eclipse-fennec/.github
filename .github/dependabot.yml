@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Keep the pinned action SHAs in the reusable workflows up to date. Consumer repos
+  # pin these reusables by SHA and get their own Dependabot bumps in turn.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

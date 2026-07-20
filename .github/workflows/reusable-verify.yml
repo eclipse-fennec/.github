@@ -1,0 +1,88 @@
+name: Reusable Verify
+
+# License gate + build/test/osgiTest/perfTest. No credentials.
+# Runs for every branch and PR via the calling repos' build/snapshot/release workflows.
+on:
+  workflow_call:
+    inputs:
+      java-versions:
+        description: 'JSON array of JDKs to test against.'
+        type: string
+        default: '["21","25"]'
+      run-perf-tests:
+        description: 'Run the perfTest task as well.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  LC_ALL: en_US.UTF-8
+  GRADLE_OPTS: >-
+    -Dorg.gradle.parallel=true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # 1) License headers gate everything else.
+  license:
+    name: License check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Git Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check License Header
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2) Build + test — only if the license check passed.
+  build:
+    name: Gradle Build (Java ${{ matrix.java-version }})
+    needs: license
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: ${{ fromJSON(inputs.java-versions) }}
+      fail-fast: false
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Git Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Gradle Wrapper Validation
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Set up Java
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: "temurin"
+          cache: "gradle"
+          java-version: ${{ matrix.java-version }}
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+      - name: Gradle version
+        run: ./gradlew --no-daemon --version
+      - name: Build with Gradle
+        run: ./gradlew clean build testOSGi --info
+      - name: Run Performance Tests
+        if: inputs.run-perf-tests
+        run: ./gradlew perfTest --info
+      - name: Publish Test Results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: test-results-java-${{ matrix.java-version }}
+          path: |
+            **/build/test-results/**/TEST-*.xml
+            **/generated/test-reports/**/TEST-*.xml
