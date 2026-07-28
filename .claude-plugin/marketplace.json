@@ -1,0 +1,13 @@
+{
+  "name": "fennec",
+  "owner": {
+    "name": "Eclipse Fennec"
+  },
+  "plugins": [
+    {
+      "name": "fennec-dev",
+      "source": "./plugins/fennec-dev",
+      "description": "Shared Claude Code tooling for Eclipse Fennec development: code-quality review skill (SOLID adapted to OSGi/DS + Eclipse Foundation guidelines)."
+    }
+  ]
+}
