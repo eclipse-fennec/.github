@@ -125,7 +125,11 @@ SHA (recommended) or `v1`.
 ### 5.1 `reusable-verify.yml`
 
 License gate + build/test/osgiTest/perfTest, matrix JDK [21,25], no credentials. Inputs:
-`java-versions` (JSON array, default `["21","25"]`) and `run-perf-tests` (bool, default true).
+`java-versions` (JSON array, default `["21","25"]`), `run-perf-tests` (bool, default true),
+`extra-gradle-tasks` (string, default empty — additional tasks appended to the build
+invocation, e.g. bndrun resolve/export checks, so PRs validate them too) and
+`gradle-parallel` (bool, default true — bnd workspaces with resolve/export tasks may
+need false).
 
 The license job runs the header check against the consumer repo's own `.licenserc.yaml`.
 (A centralized-default-with-local-override variant is an open proposal — see §7.)
@@ -133,10 +137,27 @@ The license job runs the header check against the consumer repo's own `.licenser
 ### 5.2 `reusable-release.yml`
 
 Credential-scoped publish. Inputs: `do-release` (bool, required), `publish-java-version`
-(default `21`). Secrets: `CENTRAL_SONATYPE_TOKEN_USERNAME`, `CENTRAL_SONATYPE_TOKEN_PASSWORD`,
-`GPG_PASSPHRASE`, `GPG_KEY_ID`, `GPG_PRIVATE_KEY`. Runs GPG import → `./gradlew build testOSGi
-release` with `DO_RELEASE=${{ inputs.do-release }}` → keyring cleanup. Publishes with a single
-JDK.
+(default `21`), `extra-gradle-tasks` (string, default empty — additional Gradle tasks run in
+the **same build invocation**, e.g. bndrun exports), `artifact-paths` (string, default empty —
+when set, the paths are uploaded as workflow artifact `release-jars`, with
+`if-no-files-found: error`) and `gradle-parallel` (bool, default true). Secrets:
+`CENTRAL_SONATYPE_TOKEN_USERNAME`, `CENTRAL_SONATYPE_TOKEN_PASSWORD`, `GPG_PASSPHRASE`,
+`GPG_KEY_ID`, `GPG_PRIVATE_KEY`. Runs GPG import → `./gradlew build testOSGi
+<extra-gradle-tasks> release` with `DO_RELEASE=${{ inputs.do-release }}` → keyring cleanup.
+Publishes with a single JDK.
+
+**Single-build consistency:** tests, extra tasks and the release all run in one Gradle
+invocation, so the jars that are tested, exported and published are identical. The extra
+tasks are ordered **before** the `release` task, so a failing export aborts the build before
+anything is published to Maven.
+
+Repos that additionally build container images from bnd export outputs (e.g. `model.atlas`)
+pass their export tasks via `extra-gradle-tasks` and the resulting jar paths via
+`artifact-paths`; a downstream container job then fetches the `release-jars` artifact with
+`actions/download-artifact` instead of rebuilding the workspace. This guarantees the jars
+published to Maven and the jars baked into the images come from the **same build**. The same
+export tasks can be passed to `reusable-verify`'s `extra-gradle-tasks` so PRs and feature
+branches validate the bndrun exports as well (without any artifact upload).
 
 ### 5.3 `reusable-docs.yml`
 
