@@ -13,6 +13,18 @@ on:
         description: 'JDK used for the publish step.'
         type: string
         default: '21'
+      extra-gradle-tasks:
+        description: 'Additional Gradle tasks run in the same build invocation, before the release task (e.g. bndrun exports).'
+        type: string
+        default: ''
+      artifact-paths:
+        description: 'When set, upload these paths as workflow artifact "release-jars" for downstream jobs.'
+        type: string
+        default: ''
+      gradle-parallel:
+        description: 'Run Gradle with org.gradle.parallel. bnd workspaces with resolve/export tasks may need false.'
+        type: boolean
+        default: true
     secrets:
       CENTRAL_SONATYPE_TOKEN_USERNAME:
         required: true
@@ -31,7 +43,7 @@ permissions:
 env:
   LC_ALL: en_US.UTF-8
   GRADLE_OPTS: >-
-    -Dorg.gradle.parallel=true
+    -Dorg.gradle.parallel=${{ inputs.gradle-parallel }}
 
 defaults:
   run:
@@ -74,7 +86,21 @@ jobs:
           echo "$GPG_PASSPHRASE" | gpg --batch --passphrase-fd 0 --pinentry-mode loopback --no-tty --quiet --yes --import private.key
           rm private.key
       - name: Build and Release
-        run: ./gradlew build testOSGi release --stacktrace --info
+        env:
+          # Passed via env (not inline expression) so the input never gets
+          # interpolated into the shell script; word splitting is intended.
+          EXTRA_GRADLE_TASKS: ${{ inputs.extra-gradle-tasks }}
+        # One Gradle invocation: the jars that are tested, exported (extra tasks)
+        # and released all come from the same build. Extra tasks are ordered
+        # before release so a failing export aborts before anything is published.
+        run: ./gradlew build testOSGi $EXTRA_GRADLE_TASKS release --stacktrace --info
+      - name: Upload Release Artifacts
+        if: inputs.artifact-paths != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-jars
+          path: ${{ inputs.artifact-paths }}
+          if-no-files-found: error
       - name: Publish Test Results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
