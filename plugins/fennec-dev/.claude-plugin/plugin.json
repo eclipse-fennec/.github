@@ -1,0 +1,8 @@
+{
+  "name": "fennec-dev",
+  "version": "1.0.0",
+  "description": "Shared Claude Code tooling for Eclipse Fennec development. Currently ships the fennec-quality-review skill: a code-quality review of a Fennec OSGi repository against SOLID principles (adapted to OSGi/DS) and Eclipse Foundation guidelines.",
+  "author": {
+    "name": "Eclipse Fennec"
+  }
+}
