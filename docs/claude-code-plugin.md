@@ -9,6 +9,7 @@ truth: skills are maintained here once and every fennec developer/repo picks the
 | Plugin | Contents |
 |---|---|
 | `fennec-dev` | `fennec-quality-review` skill — code-quality review of a Fennec OSGi repo against SOLID (adapted to OSGi/DS) and Eclipse Foundation guidelines. Supports whole-repo, scoped, pending-changes (`changes`), and follow-up (`followup`) reviews. |
+| `fennec-dev` | `bnd` skill — jar/OSGi bundle analysis via the bnd CLI (pinned to the current release, 7.3.0, auto-downloaded from Maven Central): manifests, imports/exports incl. version ranges, DS components, metatype, capabilities, EEs, `baseline`/`diff` semantic-versioning verdicts, wrapping plain jars, repo indexing, `.bndrun` resolving. |
 
 Marketplace and plugin manifests: `.claude-plugin/marketplace.json` (repo root) and
 `plugins/fennec-dev/.claude-plugin/plugin.json`. Skill sources live under
