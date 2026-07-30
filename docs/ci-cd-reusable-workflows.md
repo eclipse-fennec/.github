@@ -1,11 +1,36 @@
 # Fennec CI/CD – Centralized Reusable Workflows
 
-**Status:** Design / reference for migrating the project repos
-**Applies to:** all `eclipse-fennec/*` Gradle/bnd projects (starting with `emf.util`, `emf.odata`)
+**Status:** Implemented and validated in practice — the first consumer migration
+(`model.atlas`) runs fully green against these reusables (see §0)
+**Applies to:** all `eclipse-fennec/*` Gradle/bnd projects (first validated consumer:
+`model.atlas`; `emf.util`, `emf.odata` still to migrate)
 **Purpose:** Single source of truth for how Fennec CI is structured, plus a step-by-step
 checklist to migrate an individual project repo onto the shared workflows. It documents the
 reusable workflows that live in this repo (`eclipse-fennec/.github`) **and** the thin caller
 workflows that go into each project repo.
+
+---
+
+## 0. Migration status (as of 2026-07-30)
+
+| Repo | State |
+|---|---|
+| `eclipse-fennec/.github` | All 5 reusables implemented, including the single-build release extensions (`extra-gradle-tasks`, `artifact-paths`, `gradle-parallel`, `publish-java-version`) from #13 (`43722f4`). Pending: merge #13 and tag, so consumers can move their pins from the branch SHA to a release tag. |
+| `fennec-model.atlas` | **First consumer, validated.** Branch `ci/reusable-workflows` (tip `f1f8376`) is fully green: license gate + Gradle 9.6.1/JDK 25 build + `testOSGi` + bndrun export checks (run 30546108930). Thin callers: `build.yml` (verify-only), `snapshot.yml`/`release.yml` (verify → release with `do-release` false/true, `publish-java-version: '25'`, exports via `extra-gradle-tasks`, jars via `artifact-paths` → repo-local `reusable-container.yml` builds the container images from the `release-jars` artifact, docker only after the Maven publish). Pinned to `eclipse-fennec/.github@43722f4`. |
+| `emf.util`, `emf.odata` | Not yet migrated — follow the checklist in §10. |
+
+Validated in practice: the full verify path incl. `extra-gradle-tasks` on PRs/feature
+branches, and the artifact upload plumbing. **Not yet exercised** (happens on the first push
+to `snapshot` after the model.atlas PR merges): the credentialed half of
+`reusable-release.yml` (Maven snapshot deploy) and the container job's
+`download-artifact` + docker push.
+
+Next steps:
+
+1. Merge #13 (`issue-13-release-extra-tasks`) into `main` and tag.
+2. Bump the pins in the model.atlas callers from `43722f4` to the release tag.
+3. PR `ci/reusable-workflows` → `snapshot` in model.atlas; the first snapshot push then
+   verifies the remaining untested half (see above).
 
 ---
 
@@ -443,7 +468,8 @@ These flow **only** via `secrets: inherit` in `release.yml`/`snapshot.yml` into
 ## 11. Intentional deviations from the previous state
 
 - **`license.yml` is dropped** as a standalone consumer file (now part of `reusable-verify`).
-- **Release publishes with JDK 21 only**, no longer as a combined "build+release" matrix job.
+- **Release publishes with a single JDK** (default 21, configurable via
+  `publish-java-version` — model.atlas uses 25), no longer as a combined "build+release" matrix job.
   The full matrix (21+25) still runs in verify — just without credentials. This is the
   credential-scoping improvement.
 - **`initial` is no longer special-cased** (see §10.8).
