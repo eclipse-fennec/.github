@@ -25,13 +25,6 @@ to `snapshot` after the model.atlas PR merges): the credentialed half of
 `reusable-release.yml` (Maven snapshot deploy) and the container job's
 `download-artifact` + docker push.
 
-Next steps:
-
-1. Merge #13 (`issue-13-release-extra-tasks`) into `main` and tag.
-2. Bump the pins in the model.atlas callers from `43722f4` to the release tag.
-3. PR `ci/reusable-workflows` → `snapshot` in model.atlas; the first snapshot push then
-   verifies the remaining untested half (see above).
-
 ---
 
 ## 1. Motivation
