@@ -48,7 +48,6 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [emf.codegen-maven](https://github.com/eclipse-fennec/emf.codegen-maven) | Maven code generation for EMF OSGi. |
 | [emf.osgi-mcp](https://github.com/eclipse-fennec/emf.osgi-mcp) | MCP OSGi whiteboard using EMF models as structured output. |
 | [common.models](https://github.com/eclipse-fennec/common.models) | Common EMF models (Ecore models). |
-| [model.metadata](https://github.com/eclipse-fennec/model.metadata) | Common model metadata framework. |
 | [camel](https://github.com/eclipse-fennec/camel) | EMF Apache Camel whiteboard integration. |
 | [fennec.bnd.libraries](https://github.com/eclipse-fennec/fennec.bnd.libraries) | Fennec workspace and project libraries. |
 
