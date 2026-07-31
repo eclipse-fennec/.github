@@ -78,7 +78,7 @@ this package get" questions — do not answer those by eyeballing diffs.
 | Resolve a `.bndrun`, print bundles | `resolve -b <file.bndrun>` |
 | Resolve and write `-runbundles` back into the file | `resolve -W <file.bndrun>` |
 | List configured repositories / their content | `repo repos`, `repo list` (in a workspace/project dir; `-w <workspace>`) |
-| Look up what a bnd header/instruction means | `syntax <header>` e.g. `syntax -exportcontents` |
+| Look up what a bnd header/instruction means | `syntax <header>`; dash-prefixed instructions need `--`: `syntax -- -exportcontents` |
 | Expand a macro in project context | `macro '<macro>'` |
 | Project info / diagnostics | `info`, `debug` (inside a project dir) |
 
@@ -88,6 +88,8 @@ Builds in our repos run through Gradle/Maven as usual — use the CLI's `build`/
 ## Notes
 
 - Multiple jars are accepted by most analysis commands — glob freely.
-- Exit code is non-zero when `verify`/`baseline` find problems; their stderr lists them.
+- `verify` exits non-zero when it finds problems (stderr lists them). `baseline` exits 0
+  even for breaking changes — read its stdout instead: lines starting with `*` and the
+  "suggests <version>" column are the verdict, never trust the exit code alone.
 - On Windows Git Bash, quote `$BND` and jar paths (spaces in `~/.m2` are rare but paths
   with drive letters work as `/c/Users/...`).

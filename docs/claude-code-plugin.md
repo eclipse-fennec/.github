@@ -52,9 +52,9 @@ When a teammate trusts the project folder, Claude Code prompts them to install t
 and enables the plugin. This file is a candidate addition to the per-repo migration checklist
 in [ci-cd-reusable-workflows.md](./ci-cd-reusable-workflows.md).
 
-## Maintaining the skill
+## Maintaining the skills
 
-- Edit the files under `plugins/fennec-dev/skills/fennec-quality-review/` and bump `version`
+- Edit the files under `plugins/fennec-dev/skills/<skill>/` and bump `version`
   in `plugins/fennec-dev/.claude-plugin/plugin.json` so installed copies see the update.
-- The skill's Eclipse-guidelines reference is a distilled snapshot; it documents its own
-  refresh procedure (`refresh` argument) in `SKILL.md`.
+- The quality-review skill's Eclipse-guidelines reference is a distilled snapshot; it
+  documents its own refresh procedure (`refresh` argument) in `SKILL.md`.
