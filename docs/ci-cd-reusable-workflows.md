@@ -1,11 +1,29 @@
 # Fennec CI/CD – Centralized Reusable Workflows
 
-**Status:** Design / reference for migrating the project repos
-**Applies to:** all `eclipse-fennec/*` Gradle/bnd projects (starting with `emf.util`, `emf.odata`)
+**Status:** Implemented and validated in practice — the first consumer migration
+(`model.atlas`) runs fully green against these reusables (see §0)
+**Applies to:** all `eclipse-fennec/*` Gradle/bnd projects (first validated consumer:
+`model.atlas`; `emf.util`, `emf.odata` still to migrate)
 **Purpose:** Single source of truth for how Fennec CI is structured, plus a step-by-step
 checklist to migrate an individual project repo onto the shared workflows. It documents the
 reusable workflows that live in this repo (`eclipse-fennec/.github`) **and** the thin caller
 workflows that go into each project repo.
+
+---
+
+## 0. Migration status (as of 2026-07-30)
+
+| Repo | State |
+|---|---|
+| `eclipse-fennec/.github` | All 5 reusables implemented, including the single-build release extensions (`extra-gradle-tasks`, `artifact-paths`, `gradle-parallel`, `publish-java-version`) from #13 (`43722f4`). Pending: merge #13 and tag, so consumers can move their pins from the branch SHA to a release tag. |
+| `fennec-model.atlas` | **First consumer, validated.** Branch `ci/reusable-workflows` (tip `f1f8376`) is fully green: license gate + Gradle 9.6.1/JDK 25 build + `testOSGi` + bndrun export checks (run 30546108930). Thin callers: `build.yml` (verify-only), `snapshot.yml`/`release.yml` (verify → release with `do-release` false/true, `publish-java-version: '25'`, exports via `extra-gradle-tasks`, jars via `artifact-paths` → repo-local `reusable-container.yml` builds the container images from the `release-jars` artifact, docker only after the Maven publish). Pinned to `eclipse-fennec/.github@43722f4`. |
+| `emf.util`, `emf.odata` | Not yet migrated — follow the checklist in §10. |
+
+Validated in practice: the full verify path incl. `extra-gradle-tasks` on PRs/feature
+branches, and the artifact upload plumbing. **Not yet exercised** (happens on the first push
+to `snapshot` after the model.atlas PR merges): the credentialed half of
+`reusable-release.yml` (Maven snapshot deploy) and the container job's
+`download-artifact` + docker push.
 
 ---
 
@@ -125,7 +143,11 @@ SHA (recommended) or `v1`.
 ### 5.1 `reusable-verify.yml`
 
 License gate + build/test/osgiTest/perfTest, matrix JDK [21,25], no credentials. Inputs:
-`java-versions` (JSON array, default `["21","25"]`) and `run-perf-tests` (bool, default true).
+`java-versions` (JSON array, default `["21","25"]`), `run-perf-tests` (bool, default true),
+`extra-gradle-tasks` (string, default empty — additional tasks appended to the build
+invocation, e.g. bndrun resolve/export checks, so PRs validate them too) and
+`gradle-parallel` (bool, default true — bnd workspaces with resolve/export tasks may
+need false).
 
 The license job runs the header check against the consumer repo's own `.licenserc.yaml`.
 (A centralized-default-with-local-override variant is an open proposal — see §7.)
@@ -133,10 +155,27 @@ The license job runs the header check against the consumer repo's own `.licenser
 ### 5.2 `reusable-release.yml`
 
 Credential-scoped publish. Inputs: `do-release` (bool, required), `publish-java-version`
-(default `21`). Secrets: `CENTRAL_SONATYPE_TOKEN_USERNAME`, `CENTRAL_SONATYPE_TOKEN_PASSWORD`,
-`GPG_PASSPHRASE`, `GPG_KEY_ID`, `GPG_PRIVATE_KEY`. Runs GPG import → `./gradlew build testOSGi
-release` with `DO_RELEASE=${{ inputs.do-release }}` → keyring cleanup. Publishes with a single
-JDK.
+(default `21`), `extra-gradle-tasks` (string, default empty — additional Gradle tasks run in
+the **same build invocation**, e.g. bndrun exports), `artifact-paths` (string, default empty —
+when set, the paths are uploaded as workflow artifact `release-jars`, with
+`if-no-files-found: error`) and `gradle-parallel` (bool, default true). Secrets:
+`CENTRAL_SONATYPE_TOKEN_USERNAME`, `CENTRAL_SONATYPE_TOKEN_PASSWORD`, `GPG_PASSPHRASE`,
+`GPG_KEY_ID`, `GPG_PRIVATE_KEY`. Runs GPG import → `./gradlew build testOSGi
+<extra-gradle-tasks> release` with `DO_RELEASE=${{ inputs.do-release }}` → keyring cleanup.
+Publishes with a single JDK.
+
+**Single-build consistency:** tests, extra tasks and the release all run in one Gradle
+invocation, so the jars that are tested, exported and published are identical. The extra
+tasks are ordered **before** the `release` task, so a failing export aborts the build before
+anything is published to Maven.
+
+Repos that additionally build container images from bnd export outputs (e.g. `model.atlas`)
+pass their export tasks via `extra-gradle-tasks` and the resulting jar paths via
+`artifact-paths`; a downstream container job then fetches the `release-jars` artifact with
+`actions/download-artifact` instead of rebuilding the workspace. This guarantees the jars
+published to Maven and the jars baked into the images come from the **same build**. The same
+export tasks can be passed to `reusable-verify`'s `extra-gradle-tasks` so PRs and feature
+branches validate the bndrun exports as well (without any artifact upload).
 
 ### 5.3 `reusable-docs.yml`
 
@@ -422,7 +461,8 @@ These flow **only** via `secrets: inherit` in `release.yml`/`snapshot.yml` into
 ## 11. Intentional deviations from the previous state
 
 - **`license.yml` is dropped** as a standalone consumer file (now part of `reusable-verify`).
-- **Release publishes with JDK 21 only**, no longer as a combined "build+release" matrix job.
+- **Release publishes with a single JDK** (default 21, configurable via
+  `publish-java-version` — model.atlas uses 25), no longer as a combined "build+release" matrix job.
   The full matrix (21+25) still runs in verify — just without credentials. This is the
   credential-scoping improvement.
 - **`initial` is no longer special-cased** (see §10.8).

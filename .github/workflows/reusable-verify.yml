@@ -13,6 +13,14 @@ on:
         description: 'Run the perfTest task as well.'
         type: boolean
         default: true
+      extra-gradle-tasks:
+        description: 'Additional Gradle tasks appended to the build invocation (e.g. bndrun resolve/export checks).'
+        type: string
+        default: ''
+      gradle-parallel:
+        description: 'Run Gradle with org.gradle.parallel. bnd workspaces with resolve/export tasks may need false.'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -20,7 +28,7 @@ permissions:
 env:
   LC_ALL: en_US.UTF-8
   GRADLE_OPTS: >-
-    -Dorg.gradle.parallel=true
+    -Dorg.gradle.parallel=${{ inputs.gradle-parallel }}
 
 defaults:
   run:
@@ -74,7 +82,11 @@ jobs:
       - name: Gradle version
         run: ./gradlew --no-daemon --version
       - name: Build with Gradle
-        run: ./gradlew clean build testOSGi --info
+        env:
+          # Passed via env (not inline expression) so the input never gets
+          # interpolated into the shell script; word splitting is intended.
+          EXTRA_GRADLE_TASKS: ${{ inputs.extra-gradle-tasks }}
+        run: ./gradlew clean build testOSGi $EXTRA_GRADLE_TASKS --info
       - name: Run Performance Tests
         if: inputs.run-perf-tests
         run: ./gradlew perfTest --info
