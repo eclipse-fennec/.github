@@ -11,11 +11,11 @@ workflows that go into each project repo.
 
 ---
 
-## 0. Migration status (as of 2026-07-30)
+## 0. Migration status (as of 2026-08-18)
 
 | Repo | State |
 |---|---|
-| `eclipse-fennec/.github` | All 5 reusables implemented, including the single-build release extensions (`extra-gradle-tasks`, `artifact-paths`, `gradle-parallel`, `publish-java-version`) from #13 (`43722f4`). Pending: merge #13 and tag, so consumers can move their pins from the branch SHA to a release tag. |
+| `eclipse-fennec/.github` | All 5 reusables implemented, including the single-build release extensions (`extra-gradle-tasks`, `artifact-paths`, `gradle-parallel`, `publish-java-version`). Released: `v1.1.2` (`4c8b1da`), moving tag `v1` points at it — consumers can pin a release tag or its SHA instead of a branch SHA. |
 | `fennec-model.atlas` | **First consumer, validated.** Branch `ci/reusable-workflows` (tip `f1f8376`) is fully green: license gate + Gradle 9.6.1/JDK 25 build + `testOSGi` + bndrun export checks (run 30546108930). Thin callers: `build.yml` (verify-only), `snapshot.yml`/`release.yml` (verify → release with `do-release` false/true, `publish-java-version: '25'`, exports via `extra-gradle-tasks`, jars via `artifact-paths` → repo-local `reusable-container.yml` builds the container images from the `release-jars` artifact, docker only after the Maven publish). Pinned to `eclipse-fennec/.github@43722f4`. |
 | `emf.util`, `emf.odata` | Not yet migrated — follow the checklist in §10. |
 
@@ -126,11 +126,49 @@ Consumers reference the central workflows. Two options:
 - **Recommended (keeps the Scorecard "Pinned-Dependencies" posture):** pin by **SHA** and let
   **Dependabot** (`package-ecosystem: github-actions`) bump them automatically. The actual
   version work happens only in `eclipse-fennec/.github`; consumer PRs are trivial SHA bumps.
-- **Alternative (more convenient, but Scorecard complains):** a moving tag `@v1`. One central
-  edit, no consumer PRs — but an unpinned reference.
+- **Alternative (more convenient, but Scorecard complains):** the moving tag `@v1` (exists, see
+  §4.2). One central edit, no consumer PRs — but an unpinned reference.
 
 In the examples below `@<PIN>` is a placeholder. When migrating, replace it with the concrete
 SHA (recommended) or `v1`.
+
+### 4.1 Cutting a new version
+
+Releases are plain annotated tags on `main` plus a GitHub release; there is no separate release
+branch. Pick the level by what changed in `.github/workflows/reusable-*.yml`:
+
+| Level | When |
+| --- | --- |
+| patch (`v1.1.1` → `v1.1.2`) | Dependabot action-pin bumps, doc fixes — no input or behaviour change. |
+| minor (`v1.1.x` → `v1.2.0`) | New optional inputs, new reusable workflow, additional build steps. |
+| major (`v1.x` → `v2.0.0`) | Removed or renamed inputs, changed defaults, anything that breaks a caller. |
+
+```bash
+git checkout main && git pull --ff-only
+git tag -a v1.1.2 -m "Action SHA updates from Dependabot (harden-runner 2.20.1, setup-java 5.7.0, ...)"
+git push origin v1.1.2
+gh release create v1.1.2 --verify-tag --title v1.1.2 --notes "..."
+```
+
+### 4.2 Keeping the moving `v1` tag current
+
+`v1` is a **moving** tag that always points at the newest `v1.x.y`. It does not update itself —
+every new v1 release has to re-point it, otherwise `@v1` consumers silently stay on the old
+workflows:
+
+```bash
+git tag -f -a v1 -m "Moving tag: latest v1.x reusable workflows (currently v1.1.2)" <commit>
+git push origin v1 --force
+```
+
+Notes:
+
+- The force-push is expected here and only ever applies to `v1` — the immutable `v1.x.y` tags are
+  never moved or deleted.
+- A new major line gets its own moving tag (`v2`); `v1` then stays frozen on the last v1 release
+  so existing consumers keep working.
+- `gh release view v1.1.2` / `git ls-remote origin 'refs/tags/v1^{}'` are the quick checks that
+  release and moving tag ended up on the same commit.
 
 ---
 
