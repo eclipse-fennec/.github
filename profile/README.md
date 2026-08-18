@@ -33,6 +33,7 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [model.atlas](https://github.com/eclipse-fennec/model.atlas) | Fennec Model Atlas — a distributed EMF model registry and repository service. |
 | [data.atlas](https://github.com/eclipse-fennec/data.atlas) | Fennec Data Atlas — data management service built on the Fennec stack. |
 | [dcat.atlas](https://github.com/eclipse-fennec/dcat.atlas) | Fennec DCAT-AP open data portal. |
+| [event.atlas](https://github.com/eclipse-fennec/event.atlas) | Fennec Event Atlas — EMF extension for the Eclipse sensiNact broker. |
 
 ### ☕ Java / OSGi Core
 
@@ -44,6 +45,7 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [emf.odata](https://github.com/eclipse-fennec/emf.odata) | OData protocol support for EMF models. |
 | [emf.m2x](https://github.com/eclipse-fennec/emf.m2x) | EMF validation, transformation and generation. |
 | [emf.persistence-jpa](https://github.com/eclipse-fennec/emf.persistence-jpa) | EMF JPA-like persistence using EclipseLink. |
+| [emf.search](https://github.com/eclipse-fennec/emf.search) | Lucene index extension for EMF. |
 | [emf.editors](https://github.com/eclipse-fennec/emf.editors) | Custom EMF Eclipse editors. |
 | [emf.codegen-maven](https://github.com/eclipse-fennec/emf.codegen-maven) | Maven code generation for EMF OSGi. |
 | [emf.osgi-mcp](https://github.com/eclipse-fennec/emf.osgi-mcp) | MCP OSGi whiteboard using EMF models as structured output. |
