@@ -231,9 +231,25 @@ branches validate the bndrun exports as well (without any artifact upload).
 
 ### 5.3 `reusable-docs.yml`
 
-VitePress build + GitHub Pages deploy. Input: `node-version` (default `20`). The repo-specific
-publish path slug comes from each repo's `docs-site/config.mts` (via `DOCS_BRANCH`), not from
-this workflow. The deploy job holds `pages: write` + `id-token: write`.
+VitePress build + GitHub Pages deploy. The repo-specific publish path slug comes from each
+repo's `docs-site/config.mts` (via `DOCS_BRANCH`), not from this workflow. The deploy job
+holds `pages: write` + `id-token: write`.
+
+| Input | Default | Purpose |
+|---|---|---|
+| `node-version` | `20` | Node version for the build |
+| `version` | *ref name* | URL segment to publish under. Pass it when the branch name is not the segment — a release workflow on `main` publishing `latest`. |
+| `deploy` | `true` | `false` builds the slice and uploads it as a plain artifact instead of deploying. |
+| `slice-artifact` | `pages-docs` | Artifact name for that slice. |
+
+**Slice mode (`deploy: false`).** A Pages deploy replaces the *entire* site, so a repo that
+publishes more than the docs cannot let this workflow deploy. `emf.m2x` is the case: it
+publishes the OCL p2 update site under `ocl/<channel>/p2/` alongside the docs under
+`<channel>/`, for both `snapshot` and `latest`. It calls this workflow with `deploy: false`
+to get the docs slice, and its repo-local `pages-deploy.yml` merges all `pages-*` slices with
+the previously published site and deploys once. In slice mode the root `index.html` redirect
+is **not** written — with several channels the root has to point somewhere deterministic, so
+that decision belongs to the merging deploy job.
 
 Before `npm ci`, the build job checks out this repo at `github.job_workflow_sha` — the commit
 of the reusable workflow itself, so theme and workflow can never be at different versions —
