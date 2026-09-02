@@ -8,6 +8,26 @@ on:
       node-version:
         type: string
         default: '20'
+      version:
+        description: >-
+          URL segment to publish under. Defaults to the triggering ref name, which is
+          what a repo publishing one channel per branch wants. Pass it explicitly when
+          the branch name is not the segment - e.g. a release workflow on `main` that
+          publishes `latest`.
+        type: string
+        default: ''
+      deploy:
+        description: >-
+          Publish to GitHub Pages. Set false to only build and upload the slice as a
+          plain artifact, for a repo that merges several Pages slices in its own
+          orchestrator (a Pages deploy replaces the entire site, so a repo publishing
+          more than the docs cannot let this workflow deploy).
+        type: boolean
+        default: true
+      slice-artifact:
+        description: "Artifact name for the built slice when `deploy` is false."
+        type: string
+        default: pages-docs
 
 permissions:
   contents: read
@@ -89,22 +109,40 @@ jobs:
       - name: Build docs
         working-directory: docs-site
         env:
-          DOCS_BRANCH: ${{ github.ref_name }}
+          DOCS_BRANCH: ${{ inputs.version || github.ref_name }}
         run: npm run docs:build
       - name: Assemble site slice
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+          # A slice is merged by the caller's own deploy job, which owns the root
+          # redirect: with more than one channel published, the root has to point
+          # somewhere deterministic instead of at whichever slice ran last.
+          IS_FULL_SITE: ${{ inputs.deploy }}
         run: |
-          mkdir -p site/${{ github.ref_name }}
-          cp -r docs-site/docs/.vitepress/dist/. site/${{ github.ref_name }}/
-          printf '<!doctype html><meta http-equiv="refresh" content="0; url=./%s/">\n' "${{ github.ref_name }}" > site/index.html
+          mkdir -p "site/$VERSION"
+          cp -r docs-site/docs/.vitepress/dist/. "site/$VERSION/"
           touch site/.nojekyll
+          if [ "$IS_FULL_SITE" = "true" ]; then
+            printf '<!doctype html><meta http-equiv="refresh" content="0; url=./%s/">\n' "$VERSION" > site/index.html
+          fi
       - name: Upload Pages artifact
+        if: inputs.deploy
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
+      - name: Upload docs slice
+        if: ${{ !inputs.deploy }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.slice-artifact }}
+          path: site
+          if-no-files-found: error
+          include-hidden-files: true
 
   deploy:
     name: Deploy to GitHub Pages
     needs: build
+    if: inputs.deploy
     runs-on: ubuntu-latest
     permissions:
       pages: write
