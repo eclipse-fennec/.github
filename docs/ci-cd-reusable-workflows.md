@@ -81,9 +81,23 @@ Reusable workflows under `.github/workflows/`:
 |---|---|---|---|
 | `reusable-verify.yml` | `workflow_call` | License gate → Gradle `clean build testOSGi perfTest`, matrix JDK [21,25] | none |
 | `reusable-release.yml` | `workflow_call` | GPG import → `build testOSGi release` (JDK 21), `DO_RELEASE` via input | Sonatype + GPG |
-| `reusable-docs.yml` | `workflow_call` | VitePress build + GitHub Pages deploy | none |
+| `reusable-docs.yml` | `workflow_call` | Shared-theme drift gate → VitePress build + GitHub Pages deploy | none |
 | `reusable-scorecard.yml` | `workflow_call` | OpenSSF Scorecard | none |
 | `reusable-dependency-review.yml` | `workflow_call` | Dependency Review (PR) | none |
+
+Shared docs assets under `docs-theme/`:
+
+| File | Synced into the consumer as | Purpose |
+|---|---|---|
+| `index.ts` | `docs-site/docs/.vitepress/theme/index.ts` | Theme entry; renders the Eclipse Foundation footer in `layout-bottom` |
+| `custom.css` | `docs-site/docs/.vitepress/theme/custom.css` | Fennec brand palette; hides VitePress' own footer |
+| `EclipseFooter.vue` | `docs-site/docs/.vitepress/theme/EclipseFooter.vue` | The footer component |
+| `public/eclipse-foundation-*.svg` | `docs-site/docs/public/` | Official EF logos, light and dark |
+
+These files are **committed in every consumer repo** (so `npm run docs:dev` works without a
+sync step) but **owned here**. `reusable-docs.yml` compares them byte-for-byte before the
+build and fails on any difference — see §5.3. Theme changes therefore go into this repo
+first, then get synced outwards.
 
 A centralized default license config (`.licenserc.yaml`) is discussed as an **open proposal**
 in §7 — it is **not** part of the current setup; license config stays project-local for now.
@@ -220,6 +234,17 @@ branches validate the bndrun exports as well (without any artifact upload).
 VitePress build + GitHub Pages deploy. Input: `node-version` (default `20`). The repo-specific
 publish path slug comes from each repo's `docs-site/config.mts` (via `DOCS_BRANCH`), not from
 this workflow. The deploy job holds `pages: write` + `id-token: write`.
+
+Before `npm ci`, the build job checks out this repo at `github.job_workflow_sha` — the commit
+of the reusable workflow itself, so theme and workflow can never be at different versions —
+and compares every file under `docs-theme/` with its counterpart in the consumer. Any
+difference fails the build with the resync command in the log. Files in
+`docs-site/docs/public/` that the shared source does not carry (e.g. `fennec-logo.png`) are
+left alone.
+
+**Consequence for the rollout:** a consumer cannot bump its pin to a version carrying the
+gate before it has the theme files. Add the files and bump the pin in the same PR. Repos still
+pinned to an older SHA are unaffected.
 
 ### 5.4 `reusable-scorecard.yml`
 
