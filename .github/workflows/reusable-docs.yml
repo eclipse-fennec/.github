@@ -39,6 +39,50 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
+      - name: Check out the shared docs theme
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # job_workflow_sha is the commit of THIS reusable workflow, so the
+          # theme is always taken from the same version the caller pinned.
+          repository: eclipse-fennec/.github
+          ref: ${{ github.job_workflow_sha }}
+          path: .fennec-shared
+          persist-credentials: false
+      - name: Verify the docs theme matches the shared source
+        env:
+          SHARED: .fennec-shared/docs-theme
+        run: |
+          drift=0
+          while IFS= read -r src; do
+            rel=${src#"$SHARED/"}
+            case $rel in
+              public/*) target=docs-site/docs/public/${rel#public/} ;;
+              *)        target=docs-site/docs/.vitepress/theme/$rel ;;
+            esac
+            if ! cmp -s "$src" "$target"; then
+              echo "::error file=$target::does not match docs-theme/$rel in eclipse-fennec/.github"
+              drift=1
+            fi
+          done < <(find "$SHARED" -type f | sort)
+          [ "$drift" -eq 0 ] && exit 0
+          {
+            echo
+            echo "The docs theme in this repository has drifted from the shared source."
+            echo "It is owned by eclipse-fennec/.github (docs-theme/) so that the Eclipse"
+            echo "Foundation footer and the brand palette stay identical across all project"
+            echo "sites. Resync with:"
+            echo
+            echo "  git clone --depth 1 https://github.com/eclipse-fennec/.github /tmp/fennec-github"
+            echo "  cp /tmp/fennec-github/docs-theme/index.ts \\"
+            echo "     /tmp/fennec-github/docs-theme/custom.css \\"
+            echo "     /tmp/fennec-github/docs-theme/EclipseFooter.vue \\"
+            echo "     docs-site/docs/.vitepress/theme/"
+            echo "  cp /tmp/fennec-github/docs-theme/public/*.svg docs-site/docs/public/"
+            echo
+            echo "Intended theme changes go into eclipse-fennec/.github first, then get"
+            echo "synced here - not the other way round."
+          } >&2
+          exit 1
       - name: Install dependencies
         working-directory: docs-site
         run: npm ci
