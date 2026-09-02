@@ -1,7 +1,7 @@
 {
   "name": "fennec-dev",
-  "version": "1.0.0",
-  "description": "Shared Claude Code tooling for Eclipse Fennec development. Currently ships the fennec-quality-review skill: a code-quality review of a Fennec OSGi repository against SOLID principles (adapted to OSGi/DS) and Eclipse Foundation guidelines.",
+  "version": "1.1.0",
+  "description": "Shared Claude Code tooling for Eclipse Fennec development. Ships the fennec-quality-review skill (code-quality review of a Fennec OSGi repository against SOLID principles adapted to OSGi/DS and Eclipse Foundation guidelines) and the bnd skill (jar/OSGi bundle analysis via the bnd CLI: manifests, imports/exports, DS components, baseline/diff, wrap, bndrun resolve).",
   "author": {
     "name": "Eclipse Fennec"
   }
