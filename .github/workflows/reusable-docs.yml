@@ -147,6 +147,10 @@ jobs:
     permissions:
       pages: write
       id-token: write
+    # The ONE place the Pages concurrency group is declared. A caller must not
+    # declare `group: pages` at workflow level as well: its run would then hold
+    # the group this job waits for, and GitHub cancels the job before its first
+    # step (#35). Callers that need their own serialisation use another group.
     concurrency:
       group: pages
       cancel-in-progress: false

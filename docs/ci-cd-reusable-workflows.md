@@ -79,7 +79,8 @@ Reusable workflows under `.github/workflows/`:
 
 | File | `on` | Purpose | Secrets |
 |---|---|---|---|
-| `reusable-verify.yml` | `workflow_call` | License gate → Gradle `clean build testOSGi perfTest`, matrix JDK [21,25] | none |
+| `reusable-verify.yml` | `workflow_call` | License gate → Gradle `clean build testOSGi perfTest`, matrix JDK [21,25], JUnit XML as artifact + job summary | none |
+| `reusable-test-report.yml` | `workflow_call` | Opt-in: renders the verify artifacts as one check run per JDK (needs `checks: write` from the caller) | none |
 | `reusable-release.yml` | `workflow_call` | GPG import → `build testOSGi release` (JDK 21), `DO_RELEASE` via input | Sonatype + GPG |
 | `reusable-docs.yml` | `workflow_call` | Shared-theme drift gate → VitePress build + GitHub Pages deploy | none |
 | `reusable-scorecard.yml` | `workflow_call` | OpenSSF Scorecard | none |
@@ -201,6 +202,15 @@ invocation, e.g. bndrun resolve/export checks, so PRs validate them too) and
 `gradle-parallel` (bool, default true — bnd workspaces with resolve/export tasks may
 need false).
 
+Each JDK leg uploads its JUnit XML as artifact `test-results-java-<version>` (both
+`**/build/test-results/` and bnd's `**/generated/test-reports/{test,testOSGi}/`) and then
+renders it with `mikepenz/action-junit-report` in *annotate-only* mode: a job summary
+(failed/skipped tests only, empty suites hidden) plus inline annotations, **no check run**.
+That mode needs no permission beyond `contents: read`, so it is a drop-in for every caller.
+The renderer is skipped when no XML exists (the build died before any test ran — that run is
+already red) and never fails the job itself; the Gradle step is the gate. Check runs are the
+job of `reusable-test-report.yml` (§5.6).
+
 The license job runs the header check against the consumer repo's own `.licenserc.yaml`.
 (A centralized-default-with-local-override variant is an open proposal — see §7.)
 
@@ -233,7 +243,12 @@ branches validate the bndrun exports as well (without any artifact upload).
 
 VitePress build + GitHub Pages deploy. The repo-specific publish path slug comes from each
 repo's `docs-site/config.mts` (via `DOCS_BRANCH`), not from this workflow. The deploy job
-holds `pages: write` + `id-token: write`.
+holds `pages: write` + `id-token: write` and is the **only** place that declares the
+concurrency group `pages`. A caller must **not** declare `group: pages` at workflow level as
+well: the caller's run then holds the group the deploy job waits for, and GitHub cancels the
+job before its first step — the run fails in *Deploy to GitHub Pages* with zero steps and no
+annotation (#35, first seen in model.atlas). Callers that want to serialise their own run use
+a different group name (`snapshot-publish`, `release-publish` in §6.2/§6.3).
 
 | Input | Default | Purpose |
 |---|---|---|
@@ -273,6 +288,42 @@ OpenSSF Scorecard analysis. `permissions: read-all` at workflow level; the analy
 
 ---
 
+### 5.6 `reusable-test-report.yml` (opt-in check runs)
+
+Downloads the `test-results-java-<version>` artifacts that `reusable-verify.yml` uploaded and
+publishes each JDK leg as its own **check run** on the commit ("Test results (Java 21)"), with
+per-test annotations anchored to the source. Input: `java-versions` (JSON array, default
+`["21","25"]` — must match the value passed to verify). The two legs stay separate on
+purpose: they run the same suite, so a merged check would double every count. It writes no
+job summary (verify already does) and never fails the run on a failing test (verify is the
+gate) — but it *does* fail when the artifact is present and no test was parsed, so a changed
+report layout is loud instead of silently empty.
+
+This is a separate workflow rather than an input on verify because a check run needs
+`checks: write`, and a called workflow cannot request a permission conditionally: a job-level
+`checks: write` inside `reusable-verify` would be demanded from every caller, and consumers
+call it with `contents: read` only. Opting in is therefore a second `uses:` job in the caller
+that grants the permission on that job alone:
+
+```yaml
+jobs:
+  verify:
+    uses: eclipse-fennec/.github/.github/workflows/reusable-verify.yml@<PIN>
+  test-report:
+    needs: verify
+    # Render whatever verify produced, red or green — a failing run is exactly
+    # when the per-test annotations are worth having.
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      checks: write
+    uses: eclipse-fennec/.github/.github/workflows/reusable-test-report.yml@<PIN>
+```
+
+The job skips itself on pull requests from forks and on Dependabot PRs, where `GITHUB_TOKEN`
+has no `checks: write` regardless of what the workflow declares. Trialled repo-locally in
+`emf.m2x` (eclipse-fennec/emf.m2x#241) before moving here; see eclipse-fennec/.github#34.
+
 ## 6. Consumer workflows (into each project repo)
 
 `@<PIN>` = SHA (recommended) or `v1`. `secrets: inherit` forwards repo/org secrets only to the
@@ -300,6 +351,9 @@ jobs:
   verify:
     uses: eclipse-fennec/.github/.github/workflows/reusable-verify.yml@<PIN>
 ```
+
+Test results appear as a job summary on the verify jobs by default. For check runs with
+per-test annotations add the opt-in `test-report` job from §5.6.
 
 ### 6.2 `snapshot.yml` (development branch → Maven Snapshot)
 
@@ -369,13 +423,17 @@ permissions:
   contents: read
   pages: write
   id-token: write
-concurrency:
-  group: pages
-  cancel-in-progress: false
+# No workflow-level concurrency here, deliberately: the reusable's deploy job
+# already serialises on the job-level group `pages`. Declaring the same group
+# here makes the deploy job deadlock against its own run (see §5.3, #35).
 jobs:
   docs:
     uses: eclipse-fennec/.github/.github/workflows/reusable-docs.yml@<PIN>
 ```
+
+Consumers whose `docs.yml` still carries the `concurrency: group: pages` block from an
+earlier version of this template must remove it (model.atlas did in
+eclipse-fennec/model.atlas#249; emf.codec, emf.osgi-mcp and event.atlas still have it).
 
 ### 6.5 `scorecard.yml`
 
@@ -484,12 +542,17 @@ converge repos onto a single Foundation header; until then, keep license config 
 These flow **only** via `secrets: inherit` in `release.yml`/`snapshot.yml` into
 `reusable-release.yml`. Verify and docs never receive them.
 
-**Permissions:** a job that uses `uses:` (a reusable workflow) **cannot** set job-level
-`permissions` — the ceiling comes from the **caller's workflow-level** `permissions`. Therefore:
+**Permissions:** a called workflow can only **downgrade** the `GITHUB_TOKEN` permissions it
+receives from the calling job, never elevate them, and it cannot make a permission
+conditional on an input. The ceiling is the caller's workflow-level `permissions`, or the
+job-level `permissions` on the `uses:` job where one is set. Therefore:
 
 - `snapshot.yml`/`release.yml`/`docs.yml` declare `contents: read`, `pages: write`,
   `id-token: write` at workflow level (for the docs deploy).
 - The reusables declare the finer job-level permissions themselves.
+- Anything a reusable needs beyond `contents: read` that not every caller wants is a
+  separate reusable the caller opts into with a job-level grant — `reusable-test-report.yml`
+  with `checks: write` (§5.6) is the pattern.
 - `scorecard.yml` is the exception — the calling job needs the Scorecard scopes, so they sit
   directly on `jobs.scorecard` (see §6.5).
 
