@@ -2,6 +2,8 @@ name: Reusable Verify
 
 # License gate + build/test/osgiTest/perfTest. No credentials.
 # Runs for every branch and PR via the calling repos' build/snapshot/release workflows.
+# Each JDK leg uploads its JUnit XML as `test-results-java-<version>` and renders it
+# as a job summary; reusable-test-report.yml turns those artifacts into check runs.
 on:
   workflow_call:
     inputs:
@@ -95,6 +97,48 @@ jobs:
         if: always()
         with:
           name: test-results-java-${{ matrix.java-version }}
+          # bnd's Gradle plugin writes both the plain and the OSGi reports to
+          # <project>/generated/test-reports/{test,testOSGi}/; the build/ line
+          # only matters for a plain Gradle subproject. Both stay: an unmatched
+          # glob costs nothing, a missing one silently drops reports.
           path: |
             **/build/test-results/**/TEST-*.xml
             **/generated/test-reports/**/TEST-*.xml
+      - name: Look for test reports
+        # Only render when there is something to render. No XML means the build
+        # died before it ran a test (compile error) - that run is already red,
+        # and a second failure from the renderer would only hide the first.
+        id: junit
+        if: always()
+        run: |
+          if find . -path '*/TEST-*.xml' \( -path '*/build/test-results/*' -o -path '*/generated/test-reports/*' \) -print -quit | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No JUnit XML found - skipping the test report."
+          fi
+      - name: Render test results
+        # Job summary plus inline annotations, no check run: a check run needs
+        # `checks: write`, which the caller would have to grant, and a called
+        # workflow cannot request a permission conditionally. Consumers that want
+        # the check run call reusable-test-report.yml after this workflow.
+        if: always() && steps.junit.outputs.found == 'true'
+        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
+        with:
+          # One pattern, not one per directory: every line of report_paths is
+          # rendered as its own result, and the build/ one is empty in a bnd
+          # workspace. The upload above is what fixes the directories.
+          report_paths: '**/TEST-*.xml'
+          annotate_only: true
+          job_summary: true
+          detailed_summary: true
+          include_passed: false
+          # A green run of a large suite has a handful of non-passing entries
+          # (skipped tests) among hundreds of suites; without this the summary
+          # table carries one empty row per suite.
+          include_empty_in_summary: false
+          # The Gradle step is the gate; this step only renders.
+          fail_on_failure: false
+          # But DO fail when the glob matched nothing although XML exists: that
+          # means the layout changed and the report would be silently empty.
+          require_tests: true

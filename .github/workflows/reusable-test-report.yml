@@ -1,0 +1,105 @@
+name: Reusable Test Report
+
+# Turns the JUnit XML that reusable-verify.yml uploads (`test-results-java-<version>`)
+# into one check run per JDK leg, with per-test annotations anchored to the source.
+# The two legs stay separate on purpose: they run the same suite, so a merged check
+# would double every count.
+#
+# This is a separate workflow, not a step in reusable-verify, because a check run
+# needs `checks: write` and a called workflow cannot request a permission
+# conditionally: a job-level `checks: write` in reusable-verify would be demanded
+# from every caller, and consumers invoke it with `contents: read` only. Opting in
+# is therefore a second `uses:` job in the caller, after verify, with
+# `checks: write` on that job:
+#
+#   test-report:
+#     needs: verify
+#     if: ${{ !cancelled() }}
+#     permissions:
+#       contents: read
+#       checks: write
+#     uses: eclipse-fennec/.github/.github/workflows/reusable-test-report.yml@<PIN>
+#
+# The job summary is not rendered here - reusable-verify already writes it.
+on:
+  workflow_call:
+    inputs:
+      java-versions:
+        description: >-
+          JSON array of the JDKs verify ran, i.e. the suffixes of the
+          `test-results-java-<version>` artifacts. Must match the java-versions
+          passed to reusable-verify.
+        type: string
+        default: '["21","25"]'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  report:
+    # GITHUB_TOKEN has no `checks: write` for a pull request from a fork or one
+    # opened by Dependabot; the API answers 403 there, which would paint an
+    # otherwise fine run red. Skip instead: the artifacts are still uploaded, the
+    # job summary from verify is still there, and verify is still the gate.
+    if: >-
+      (github.event_name != 'pull_request'
+        || github.event.pull_request.head.repo.full_name == github.repository)
+      && github.actor != 'dependabot[bot]'
+    name: Test results (Java ${{ matrix.java-version }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # publish the JUnit results as a check run
+    strategy:
+      matrix:
+        java-version: ${{ fromJSON(inputs.java-versions) }}
+      fail-fast: false
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Git Checkout
+        # Annotations are anchored to source files, which the action resolves
+        # against the working tree; without a checkout they would be text only.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download test results
+        id: download
+        # Missing artifact = verify died before it ran a test (license gate,
+        # compile error). That run is already red; do not pile a second failure
+        # on top of it, just skip the rendering.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: test-results-java-${{ matrix.java-version }}
+          # Own directory, deliberately not named after either report directory,
+          # so the glob cannot accidentally depend on the name.
+          path: junit-xml
+      - name: Publish test results
+        if: steps.download.outcome == 'success'
+        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
+        with:
+          # Depth-agnostic on purpose: bnd's Gradle plugin writes to
+          # <project>/generated/test-reports/{test,testOSGi}/, a plain Gradle
+          # project to build/test-results/, and the uploader roots the artifact
+          # at the repository root because the matches span several projects.
+          # A single pattern, not one line per directory: report_paths is a
+          # multiline input and every line produces its own check run.
+          report_paths: 'junit-xml/**/TEST-*.xml'
+          check_name: Test results (Java ${{ matrix.java-version }})
+          job_summary: false
+          include_passed: false
+          include_empty_in_summary: false
+          # verify already fails the run on a failing test. This job only
+          # renders, so it stays green and the check run carries the verdict.
+          fail_on_failure: false
+          # But DO fail if the glob matched nothing: the artifact only exists
+          # when the upload found XML, so "artifact present, no tests parsed"
+          # means the path is wrong, not that the build had no tests.
+          require_tests: true
