@@ -1,0 +1,274 @@
+name: Reusable Container
+
+# Container image build + publish to Docker Hub AND GHCR, one image per call.
+#
+# The runtime jar is NOT rebuilt here: it is restored from the `release-jars`
+# artifact that reusable-release.yml uploads (inputs `extra-gradle-tasks` +
+# `artifact-paths`), so the image embeds exactly the jar that was published to
+# Maven in the same Gradle invocation. Callers must therefore run this workflow
+# after a release job, never straight after verify.
+#
+# Every image gets two tags per registry: the moving `docker-label`
+# (snapshot/latest) and the immutable Bundle-Version read from `version-jar`,
+# both prefixed with `<variant>-` when the repo publishes several variants of
+# one image (e.g. `apicurio-snapshot`, `file-1.2.3.…`).
+#
+# Staging the build context works in one of two ways:
+#   * declarative (default) — `runtime-jar` is copied to
+#     `<docker-context>/content/<runtime-jar-target>` and the contents of
+#     `runtime-dir` to `<docker-context>/content/runtime/`;
+#   * `prepare-command` — an arbitrary command (typically a Gradle
+#     `prepareDocker` task) stages the context itself and wins over the
+#     declarative copy.
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'Image repository name inside both registries, e.g. event.atlas.'
+        type: string
+        required: true
+      docker-label:
+        description: 'Moving docker tag label, e.g. snapshot or latest.'
+        type: string
+        required: true
+      docker-context:
+        description: 'Docker build context directory, e.g. docker/eventatlas.'
+        type: string
+        required: true
+      version-jar:
+        description: >-
+          Jar whose Bundle-Version becomes the immutable image tag. A path is used
+          as given; a bare file name is located anywhere below the workspace.
+        type: string
+        required: true
+      variant:
+        description: >-
+          Tag prefix for repos that publish several variants of one image
+          (apicurio, file, atlas, …). Empty for a single-image repo.
+        type: string
+        default: ''
+      runtime-jar:
+        description: >-
+          Exported runtime jar to stage into the build context (declarative
+          staging). Path or bare file name, like version-jar. Required unless
+          prepare-command is set.
+        type: string
+        default: ''
+      runtime-jar-target:
+        description: >-
+          File name the runtime jar gets under <docker-context>/content/, i.e.
+          what the Dockerfile COPYs. Defaults to the runtime-jar file name; set it
+          when the Dockerfile expects a variant-independent name.
+        type: string
+        default: ''
+      runtime-dir:
+        description: >-
+          Repo-local directory whose contents are staged into
+          <docker-context>/content/runtime/. Empty when the image carries no
+          runtime tree.
+        type: string
+        default: ''
+      prepare-command:
+        description: >-
+          Command that stages <docker-context>/content itself, e.g.
+          "./gradlew --no-daemon :docker:dcatatlas:prepareDocker". Replaces the
+          declarative staging. Gradle wrapper validation runs when this is set.
+        type: string
+        default: ''
+      java-version:
+        description: 'JDK for the bnd version lookup and the prepare command.'
+        type: string
+        default: '21'
+      platforms:
+        description: 'Target platforms for the multi-arch build.'
+        type: string
+        default: 'linux/amd64,linux/arm64/v8'
+      bnd-version:
+        description: 'bnd CLI version used to read Bundle-Version from the jar.'
+        type: string
+        default: '7.2.1'
+      docker-hub-namespace:
+        description: 'Docker Hub user/org that owns the image.'
+        type: string
+        default: 'eclipsefennec'
+      ghcr-namespace:
+        description: 'GHCR owner. Defaults to the calling repository owner.'
+        type: string
+        default: ''
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_API_TOKEN:
+        required: true
+    outputs:
+      version:
+        description: 'Bundle-Version used as the immutable image tag.'
+        value: ${{ jobs.container.outputs.version }}
+      digest:
+        description: 'Digest of the pushed multi-arch manifest.'
+        value: ${{ jobs.container.outputs.digest }}
+
+permissions:
+  contents: read
+
+env:
+  LC_ALL: en_US.UTF-8
+  HUB_IMAGE: docker.io/${{ inputs.docker-hub-namespace }}/${{ inputs.image-name }}
+  # ghcr.io rejects upper case in the owner and the image name; every fennec
+  # org and repository name already is lower case.
+  GHCR_IMAGE: ghcr.io/${{ inputs.ghcr-namespace != '' && inputs.ghcr-namespace || github.repository_owner }}/${{ inputs.image-name }}
+  # `apicurio-snapshot` for a variant build, plain `snapshot` without a variant.
+  TAG_PREFIX: ${{ inputs.variant != '' && format('{0}-', inputs.variant) || '' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  container:
+    name: Container Deploy (${{ inputs.image-name }} ${{ inputs.variant != '' && format('{0}-', inputs.variant) || '' }}${{ inputs.docker-label }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    outputs:
+      version: ${{ steps.bundle_version.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Check inputs
+        # Fail before the checkout rather than with a confusing "file not found"
+        # in the staging step further down.
+        env:
+          PREPARE_COMMAND: ${{ inputs.prepare-command }}
+          RUNTIME_JAR: ${{ inputs.runtime-jar }}
+        run: |
+          if [ -z "$PREPARE_COMMAND" ] && [ -z "$RUNTIME_JAR" ]; then
+            echo "::error::Set runtime-jar for the declarative staging, or prepare-command to stage the build context yourself."
+            exit 1
+          fi
+      - name: Git Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Gradle Wrapper Validation
+        if: inputs.prepare-command != ''
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      - name: Set up Java
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          # The bnd version lookup needs no Gradle cache; a prepare command does.
+          cache: ${{ inputs.prepare-command != '' && 'gradle' || '' }}
+      - name: Grant execute permission for gradlew
+        if: inputs.prepare-command != ''
+        run: chmod +x ./gradlew
+      # Restored at the workspace root, which is where a Gradle prepare command
+      # expects the exported jar. Note that upload-artifact roots the archive at
+      # the least common ancestor of the uploaded paths, so a release job that
+      # uploads a single path loses the directory prefix — the lookups below
+      # therefore locate jars by name rather than by expected path.
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-jars
+          path: .
+      - name: Install bnd
+        env:
+          BND_VERSION: ${{ inputs.bnd-version }}
+        run: |
+          curl -fsSL -o /tmp/biz.aQute.bnd.jar \
+            "https://repo1.maven.org/maven2/biz/aQute/bnd/biz.aQute.bnd/${BND_VERSION}/biz.aQute.bnd-${BND_VERSION}.jar"
+      - name: Extract Bundle Version
+        id: bundle_version
+        env:
+          VERSION_JAR: ${{ inputs.version-jar }}
+        run: |
+          # `-print -quit` rather than a pipe into head: with `pipefail` a
+          # find that gets EPIPE after the first match fails the step.
+          if [ -f "$VERSION_JAR" ]; then
+            JAR="$VERSION_JAR"
+          else
+            JAR=$(find . -name "$(basename "$VERSION_JAR")" -type f -print -quit)
+          fi
+          test -f "$JAR" || { echo "::error::version-jar '$VERSION_JAR' not found in the workspace."; exit 1; }
+          VERSION=$(java -jar /tmp/biz.aQute.bnd.jar select -h Bundle-Version "$JAR" 2>/dev/null | sed -n '1p')
+          echo "Bundle-Version of $JAR: $VERSION"
+          test -n "$VERSION" || { echo "::error::No Bundle-Version in '$JAR'."; exit 1; }
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Prepare Docker content
+        if: inputs.prepare-command == ''
+        env:
+          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+          RUNTIME_JAR: ${{ inputs.runtime-jar }}
+          RUNTIME_JAR_TARGET: ${{ inputs.runtime-jar-target }}
+          RUNTIME_DIR: ${{ inputs.runtime-dir }}
+        run: |
+          if [ -f "$RUNTIME_JAR" ]; then
+            JAR="$RUNTIME_JAR"
+          else
+            JAR=$(find . -name "$(basename "$RUNTIME_JAR")" -type f -print -quit)
+          fi
+          test -f "$JAR" || { echo "::error::runtime-jar '$RUNTIME_JAR' not found in the workspace."; exit 1; }
+          mkdir -p "$DOCKER_CONTEXT/content"
+          cp "$JAR" "$DOCKER_CONTEXT/content/${RUNTIME_JAR_TARGET:-$(basename "$RUNTIME_JAR")}"
+          if [ -n "$RUNTIME_DIR" ]; then
+            mkdir -p "$DOCKER_CONTEXT/content/runtime"
+            # `/.` and not `/*`: some runtime trees keep their mount points in
+            # git with a dotfile placeholder, which a glob would drop.
+            cp -rf "$RUNTIME_DIR"/. "$DOCKER_CONTEXT/content/runtime/"
+          fi
+          ls -lR "$DOCKER_CONTEXT/content"
+      - name: Prepare Docker content (prepare-command)
+        if: inputs.prepare-command != ''
+        env:
+          # Passed via env (not inline expression) so the input never gets
+          # interpolated into the shell script.
+          PREPARE_COMMAND: ${{ inputs.prepare-command }}
+          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+        run: |
+          eval "$PREPARE_COMMAND"
+          ls -lR "$DOCKER_CONTEXT/content"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_API_TOKEN }}
+      - name: Login to Github Docker Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and Push Docker Image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ inputs.docker-context }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |-
+            ${{ env.HUB_IMAGE }}:${{ env.TAG_PREFIX }}${{ inputs.docker-label }}
+            ${{ env.HUB_IMAGE }}:${{ env.TAG_PREFIX }}${{ steps.bundle_version.outputs.version }}
+            ${{ env.GHCR_IMAGE }}:${{ env.TAG_PREFIX }}${{ inputs.docker-label }}
+            ${{ env.GHCR_IMAGE }}:${{ env.TAG_PREFIX }}${{ steps.bundle_version.outputs.version }}
+      - name: Summarize the published image
+        run: |
+          {
+            echo "### Container image \`${TAG_PREFIX}${{ inputs.docker-label }}\`"
+            echo
+            echo "| Tag | |"
+            echo "|---|---|"
+            echo "| \`${HUB_IMAGE}:${TAG_PREFIX}${{ inputs.docker-label }}\` | moving |"
+            echo "| \`${HUB_IMAGE}:${TAG_PREFIX}${{ steps.bundle_version.outputs.version }}\` | immutable |"
+            echo "| \`${GHCR_IMAGE}:${TAG_PREFIX}${{ inputs.docker-label }}\` | moving |"
+            echo "| \`${GHCR_IMAGE}:${TAG_PREFIX}${{ steps.bundle_version.outputs.version }}\` | immutable |"
+            echo
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
