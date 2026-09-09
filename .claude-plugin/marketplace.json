@@ -7,7 +7,7 @@
     {
       "name": "fennec-dev",
       "source": "./plugins/fennec-dev",
-      "description": "Shared Claude Code tooling for Eclipse Fennec development: code-quality review skill (SOLID adapted to OSGi/DS + Eclipse Foundation guidelines)."
+      "description": "Shared Claude Code tooling for Eclipse Fennec development: code-quality review skill (SOLID adapted to OSGi/DS + Eclipse Foundation guidelines) and bnd skill (jar/OSGi bundle analysis via the bnd CLI)."
     }
   ]
 }
