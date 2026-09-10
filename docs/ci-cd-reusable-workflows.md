@@ -377,7 +377,10 @@ ghcr.io/eclipse-fennec/model.atlas:apicurio-1.2.3.20260908…
 
 - *declarative* (default) — `runtime-jar` is copied to
   `<docker-context>/content/<runtime-jar-target>` and the **contents** of `runtime-dir` into
-  `<docker-context>/content/runtime/`. Nothing else is needed in the consumer repo.
+  `<docker-context>/content/runtime/`. Nothing else is needed in the consumer repo. The copy
+  is a glob, so a top-level dotfile — every one of these trees carries a development-time
+  `.gitignore` — stays out of the image, while the `.keep` placeholders that hold mount-point
+  directories in git are one level down and travel with their subdirectory.
 - *`prepare-command`* — an arbitrary command (in practice `./gradlew --no-daemon
   :docker:<x>:prepareDocker`) stages `content/` itself. It wins over the declarative copy, and
   it is the only mode that also runs Gradle wrapper validation and enables the Gradle cache.

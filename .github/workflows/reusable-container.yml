@@ -218,9 +218,11 @@ jobs:
           cp "$JAR" "$DOCKER_CONTEXT/content/${RUNTIME_JAR_TARGET:-$(basename "$RUNTIME_JAR")}"
           if [ -n "$RUNTIME_DIR" ]; then
             mkdir -p "$DOCKER_CONTEXT/content/runtime"
-            # `/.` and not `/*`: some runtime trees keep their mount points in
-            # git with a dotfile placeholder, which a glob would drop.
-            cp -rf "$RUNTIME_DIR"/. "$DOCKER_CONTEXT/content/runtime/"
+            # A glob, so a top-level dotfile (every one of these trees carries a
+            # development-time .gitignore) stays out of the image. The mount-point
+            # .keep placeholders live one level down, inside the copied
+            # subdirectories, and are unaffected.
+            cp -rf "$RUNTIME_DIR"/* "$DOCKER_CONTEXT/content/runtime"
           fi
           ls -lR "$DOCKER_CONTEXT/content"
       - name: Prepare Docker content (prepare-command)
