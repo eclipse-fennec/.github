@@ -11,19 +11,20 @@ workflows that go into each project repo.
 
 ---
 
-## 0. Migration status (as of 2026-08-18)
+## 0. Migration status (as of 2026-09-08)
 
 | Repo | State |
 |---|---|
-| `eclipse-fennec/.github` | All 5 reusables implemented, including the single-build release extensions (`extra-gradle-tasks`, `artifact-paths`, `gradle-parallel`, `publish-java-version`). Released: `v1.1.2` (`4c8b1da`), moving tag `v1` points at it — consumers can pin a release tag or its SHA instead of a branch SHA. |
+| `eclipse-fennec/.github` | Seven reusables implemented: verify, test-report, release, docs, scorecard, dependency-review and — new, not yet in a release tag — `reusable-container.yml` (§5.7). Latest release: `v1.3.0` (`2a98ad6`), moving tag `v1` points at it. Adding the container workflow is a new optional reusable, so it goes out as a **minor** bump (`v1.4.0`) per §4.1, followed by re-pointing `v1` (§4.2). |
 | `fennec-model.atlas` | **First consumer, validated.** Branch `ci/reusable-workflows` (tip `f1f8376`) is fully green: license gate + Gradle 9.6.1/JDK 25 build + `testOSGi` + bndrun export checks (run 30546108930). Thin callers: `build.yml` (verify-only), `snapshot.yml`/`release.yml` (verify → release with `do-release` false/true, `publish-java-version: '25'`, exports via `extra-gradle-tasks`, jars via `artifact-paths` → repo-local `reusable-container.yml` builds the container images from the `release-jars` artifact, docker only after the Maven publish). Pinned to `eclipse-fennec/.github@43722f4`. |
+| `event.atlas`, `model.atlas`, `data.atlas`, `dcat.atlas` | On the central verify/release reusables, but each still carries its **own** repo-local `reusable-container.yml` — the four copies this repo's `reusable-container.yml` generalizes (input mapping per repo in §5.7, wiring in §6.8). Migrating them means swapping the `uses:` to the central workflow and deleting the local file. |
 | `emf.util`, `emf.odata` | Not yet migrated — follow the checklist in §10. |
 
 Validated in practice: the full verify path incl. `extra-gradle-tasks` on PRs/feature
-branches, and the artifact upload plumbing. **Not yet exercised** (happens on the first push
-to `snapshot` after the model.atlas PR merges): the credentialed half of
-`reusable-release.yml` (Maven snapshot deploy) and the container job's
-`download-artifact` + docker push.
+branches, the artifact upload plumbing, and — through the repo-local copies in the four atlas
+repos — the whole `release-jars` → `download-artifact` → docker push chain that
+`reusable-container.yml` now centralizes. **Not yet exercised:** the central container
+workflow itself, on the first `snapshot` push of the first repo that switches to it.
 
 ---
 
@@ -85,6 +86,7 @@ Reusable workflows under `.github/workflows/`:
 | `reusable-docs.yml` | `workflow_call` | Shared-theme drift gate → VitePress build + GitHub Pages deploy | none |
 | `reusable-scorecard.yml` | `workflow_call` | OpenSSF Scorecard | none |
 | `reusable-dependency-review.yml` | `workflow_call` | Dependency Review (PR) | none |
+| `reusable-container.yml` | `workflow_call` | Docker image build + multi-arch push to Docker Hub and GHCR, from the `release-jars` artifact | Docker Hub |
 
 Shared docs assets under `docs-theme/`:
 
@@ -114,8 +116,8 @@ Thin callers under `.github/workflows/`:
 | File | `on` | Calls |
 |---|---|---|
 | `build.yml` | push (except `main`,`snapshot`) + PR | `reusable-verify` |
-| `snapshot.yml` | push `snapshot` | `reusable-verify` → `reusable-release`(do-release=false) → `reusable-docs` |
-| `release.yml` | push `main` | `reusable-verify` → `reusable-release`(do-release=true) → `reusable-docs` |
+| `snapshot.yml` | push `snapshot` | `reusable-verify` → `reusable-release`(do-release=false) → `reusable-docs`, and for image repos `reusable-container`(docker-label=snapshot) |
+| `release.yml` | push `main` | `reusable-verify` → `reusable-release`(do-release=true) → `reusable-docs`, and for image repos `reusable-container`(docker-label=latest) |
 | `docs.yml` | `workflow_dispatch` | `reusable-docs` (manual rebuild) |
 | `scorecard.yml` | schedule / push main / branch_protection_rule | `reusable-scorecard` |
 | `dependency-review.yml` | PR | `reusable-dependency-review` |
@@ -127,10 +129,13 @@ Chain for a push to `main`:
 release.yml
   └─ verify   (reusable-verify)         license → build/test matrix [21,25]   [no secrets]
        └─ release (reusable-release)    GPG + gradle release, DO_RELEASE=true  [Sonatype+GPG]
-            └─ docs (reusable-docs)     VitePress build + Pages deploy         [no secrets]
+            ├─ docs (reusable-docs)     VitePress build + Pages deploy         [no secrets]
+            └─ container (reusable-container)  image from the release-jars     [Docker Hub]
+                                               artifact, tag `latest`          (image repos only)
 ```
 
-`snapshot.yml` is identical, only `DO_RELEASE=false` (→ Maven Snapshot).
+`snapshot.yml` is identical, only `DO_RELEASE=false` (→ Maven Snapshot) and the moving image
+tag is `snapshot`. `docs` and `container` both hang off `release` and run in parallel.
 
 ---
 
@@ -233,8 +238,8 @@ anything is published to Maven.
 
 Repos that additionally build container images from bnd export outputs (e.g. `model.atlas`)
 pass their export tasks via `extra-gradle-tasks` and the resulting jar paths via
-`artifact-paths`; a downstream container job then fetches the `release-jars` artifact with
-`actions/download-artifact` instead of rebuilding the workspace. This guarantees the jars
+`artifact-paths`; `reusable-container.yml` (§5.7) then fetches the `release-jars` artifact
+instead of rebuilding the workspace. This guarantees the jars
 published to Maven and the jars baked into the images come from the **same build**. The same
 export tasks can be passed to `reusable-verify`'s `extra-gradle-tasks` so PRs and feature
 branches validate the bndrun exports as well (without any artifact upload).
@@ -324,11 +329,85 @@ The job skips itself on pull requests from forks and on Dependabot PRs, where `G
 has no `checks: write` regardless of what the workflow declares. Trialled repo-locally in
 `emf.m2x` (eclipse-fennec/emf.m2x#241) before moving here; see eclipse-fennec/.github#34.
 
+### 5.7 `reusable-container.yml`
+
+Builds **one** container image and pushes it to Docker Hub *and* GHCR. Repos that publish
+several variants of the same image call the workflow once per variant, so the variants build
+in parallel and a broken one does not block the others.
+
+The image never rebuilds the workspace: the runtime jar comes from the `release-jars`
+artifact that `reusable-release.yml` uploaded (`extra-gradle-tasks` + `artifact-paths`, §5.2),
+so the jar inside the image is byte-identical to the one published to Maven. **The caller must
+therefore run this after a release job, never straight after verify** — without that artifact
+the download step fails.
+
+Inputs:
+
+| Input | Default | Purpose |
+|---|---|---|
+| `image-name` | required | Image repository name in both registries, e.g. `event.atlas`. |
+| `docker-label` | required | Moving tag — `snapshot` from `snapshot.yml`, `latest` from `release.yml`. |
+| `docker-context` | required | Docker build context, e.g. `docker/eventatlas`. |
+| `version-jar` | required | Jar whose `Bundle-Version` becomes the immutable tag. |
+| `variant` | `''` | Tag prefix for multi-variant repos (`apicurio`, `file`, `atlas`, …). |
+| `runtime-jar` | `''` | Exported runtime jar to stage. Required unless `prepare-command` is set. |
+| `runtime-jar-target` | `''` | Name the jar gets under `content/`; defaults to the `runtime-jar` file name. |
+| `runtime-dir` | `''` | Repo-local directory staged into `content/runtime/`. |
+| `prepare-command` | `''` | Stages the context itself, e.g. a Gradle `prepareDocker` task. |
+| `java-version` | `'21'` | JDK for the version lookup and the prepare command. |
+| `platforms` | `linux/amd64,linux/arm64/v8` | Multi-arch target list. |
+| `bnd-version` | `'7.2.1'` | bnd CLI used to read `Bundle-Version`. |
+| `docker-hub-namespace` | `eclipsefennec` | Docker Hub owner. |
+| `ghcr-namespace` | `''` | GHCR owner; empty means the calling repository's owner. |
+
+Secrets: `DOCKER_USERNAME`, `DOCKER_API_TOKEN` (GHCR uses the run's own `GITHUB_TOKEN`).
+Outputs: `version` (the `Bundle-Version` used as the tag) and `digest` of the pushed manifest.
+
+**Tagging.** Four tags per call — the moving label and the immutable bundle version, in both
+registries, each prefixed with `<variant>-` when `variant` is set:
+
+```
+docker.io/eclipsefennec/model.atlas:apicurio-snapshot        # moving
+docker.io/eclipsefennec/model.atlas:apicurio-1.2.3.20260908… # immutable
+ghcr.io/eclipse-fennec/model.atlas:apicurio-snapshot
+ghcr.io/eclipse-fennec/model.atlas:apicurio-1.2.3.20260908…
+```
+
+**Two ways to stage the build context**, mutually exclusive:
+
+- *declarative* (default) — `runtime-jar` is copied to
+  `<docker-context>/content/<runtime-jar-target>` and the **contents** of `runtime-dir` into
+  `<docker-context>/content/runtime/`. Nothing else is needed in the consumer repo.
+- *`prepare-command`* — an arbitrary command (in practice `./gradlew --no-daemon
+  :docker:<x>:prepareDocker`) stages `content/` itself. It wins over the declarative copy, and
+  it is the only mode that also runs Gradle wrapper validation and enables the Gradle cache.
+
+**Jars are located by name, not by path.** `actions/upload-artifact` roots the archive at the
+least common ancestor of the uploaded paths, so the layout inside `release-jars` depends on
+*which* paths the release job uploaded. `version-jar`/`runtime-jar` are therefore used as-is
+when the path exists and otherwise searched for by file name below the workspace. A
+`prepare-command` has no such freedom — it reads the jar from the exact path its Gradle task
+expects, which survives the round-trip only as long as the release job uploads **at least two
+paths from different top-level directories** (the usual runtime jar + version jar pair keeps
+the ancestor at the repository root).
+
+Consumer values for the repos that currently carry a repo-local copy of this workflow:
+
+| Repo | Calls | Notable inputs |
+|---|---|---|
+| `event.atlas` | 1 | `docker-context: docker/eventatlas`, `runtime-jar: eventatlas.runtime_docker.jar`, `runtime-dir: org.eclipse.fennec.event.atlas.mapping.runtime/runtime`, `version-jar: org.eclipse.fennec.event.atlas.mapping.jar` |
+| `model.atlas` | 2 (`apicurio`, `file`) | `java-version: '25'`, per-variant `docker-context: docker/modelatlas_<variant>` and `runtime-jar: modelatlas.runtime_docker_<variant>.jar`, both renamed via `runtime-jar-target: modelatlas.runtime_docker.jar` |
+| `data.atlas` | 2 (`file`, `atlas`) | `docker-context: docker/dataatlas` / `docker/dataatlas-atlas`, `runtime-jar: dataatlas.runtime_docker.jar` / `dataatlas.runtime_docker_atlas.jar` (Dockerfiles COPY the variant name, so no `runtime-jar-target`) |
+| `dcat.atlas` | 1 | `prepare-command: ./gradlew --no-daemon :docker:dcatatlas:prepareDocker`, `version-jar: org.eclipse.fennec.dcat.atlas.api.jar`, no `runtime-dir` (the image carries only the jar) |
+
+---
+
 ## 6. Consumer workflows (into each project repo)
 
 `@<PIN>` = SHA (recommended) or `v1`. `secrets: inherit` forwards repo/org secrets only to the
-called reusable; since only `reusable-release.yml` declares `secrets:`, verify and docs receive
-**no** publishing credentials (credential scoping is preserved).
+called reusable, and a reusable only ever receives the secrets it declares: `reusable-release.yml`
+the Sonatype/GPG ones, `reusable-container.yml` the Docker Hub ones, while verify and docs
+receive **no** credentials at all (credential scoping is preserved).
 
 ### 6.1 `build.yml` (feature branches + PR)
 
@@ -356,6 +435,9 @@ Test results appear as a job summary on the verify jobs by default. For check ru
 per-test annotations add the opt-in `test-report` job from §5.6.
 
 ### 6.2 `snapshot.yml` (development branch → Maven Snapshot)
+
+Repos that publish a container image add a `container` job and `packages: write` here — see
+§6.8.
 
 ```yaml
 name: Snapshot Build
@@ -385,6 +467,9 @@ jobs:
 ```
 
 ### 6.3 `release.yml` (release branch → Maven Central)
+
+Repos that publish a container image add a `container` job and `packages: write` here — see
+§6.8.
 
 ```yaml
 name: Release Build
@@ -500,6 +585,102 @@ updates:
 
 ---
 
+### 6.8 Container publishing (image repos only)
+
+Three additions to `snapshot.yml` / `release.yml`, nothing else:
+
+1. `packages: write` in the workflow-level `permissions` (for the GHCR push),
+2. the export tasks and jar paths on the `release` job, so the image gets its jar out of the
+   very build that published to Maven,
+3. a `container` job per image variant, `needs: release`.
+
+`snapshot.yml` for a single-image repo (`event.atlas`):
+
+```yaml
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  packages: write # GHCR push
+jobs:
+  # verify: … (as in §6.2)
+  release:
+    needs: verify
+    uses: eclipse-fennec/.github/.github/workflows/reusable-release.yml@<PIN>
+    with:
+      do-release: false
+      # bnd resolve/export tasks are not parallel-safe in this workspace.
+      gradle-parallel: false
+      extra-gradle-tasks: >-
+        org.eclipse.fennec.event.atlas.mapping.runtime:export.eventatlas.runtime_docker
+      # The runtime jar the image runs, plus the jar the container job reads the
+      # Bundle-Version from. Two paths from different top-level directories, so the
+      # artifact keeps its directory layout (§5.7).
+      artifact-paths: |
+        org.eclipse.fennec.event.atlas.mapping.runtime/generated/distributions/executable/eventatlas.runtime_docker.jar
+        org.eclipse.fennec.event.atlas.mapping/generated/org.eclipse.fennec.event.atlas.mapping.jar
+    secrets: inherit
+  container:
+    needs: release
+    uses: eclipse-fennec/.github/.github/workflows/reusable-container.yml@<PIN>
+    with:
+      image-name: event.atlas
+      docker-label: snapshot
+      docker-context: docker/eventatlas
+      runtime-jar: eventatlas.runtime_docker.jar
+      runtime-dir: org.eclipse.fennec.event.atlas.mapping.runtime/runtime
+      version-jar: org.eclipse.fennec.event.atlas.mapping.jar
+    secrets: inherit
+  docs:
+    needs: release
+    uses: eclipse-fennec/.github/.github/workflows/reusable-docs.yml@<PIN>
+```
+
+`release.yml` is the same with `do-release: true` and `docker-label: latest`.
+
+A multi-variant repo repeats the `container` job per variant (`model.atlas`):
+
+```yaml
+  container-apicurio:
+    needs: release
+    uses: eclipse-fennec/.github/.github/workflows/reusable-container.yml@<PIN>
+    with:
+      image-name: model.atlas
+      docker-label: snapshot
+      variant: apicurio
+      java-version: '25'
+      docker-context: docker/modelatlas_apicurio
+      runtime-jar: modelatlas.runtime_docker_apicurio.jar
+      # The Dockerfile COPYs a variant-independent name.
+      runtime-jar-target: modelatlas.runtime_docker.jar
+      runtime-dir: org.eclipse.fennec.model.atlas.runtime/runtime
+      version-jar: org.eclipse.fennec.model.atlas.rest.application.jar
+    secrets: inherit
+  container-file:
+    # … identical, variant: file, docker-context: docker/modelatlas_file,
+    #    runtime-jar: modelatlas.runtime_docker_file.jar
+```
+
+And a repo that stages its context with Gradle (`dcat.atlas`):
+
+```yaml
+  container:
+    needs: release
+    uses: eclipse-fennec/.github/.github/workflows/reusable-container.yml@<PIN>
+    with:
+      image-name: dcat.atlas
+      docker-label: snapshot
+      docker-context: docker/dcatatlas
+      prepare-command: ./gradlew --no-daemon :docker:dcatatlas:prepareDocker
+      version-jar: org.eclipse.fennec.dcat.atlas.api.jar
+    secrets: inherit
+```
+
+The repo-local `reusable-container.yml` is **deleted** in the same PR; `secrets: inherit`
+forwards `DOCKER_USERNAME`/`DOCKER_API_TOKEN` exactly as it did before.
+
+---
+
 ## 7. License configuration (`.licenserc.yaml`) — OPEN PROPOSAL, not implemented
 
 > **Status:** open question, deliberately **not** part of the current setup. Today each repo
@@ -542,13 +723,23 @@ converge repos onto a single Foundation header; until then, keep license config 
 These flow **only** via `secrets: inherit` in `release.yml`/`snapshot.yml` into
 `reusable-release.yml`. Verify and docs never receive them.
 
+Image-publishing repos additionally need the Docker Hub credentials, which reach
+`reusable-container.yml` the same way (and nothing else — the release job declares no Docker
+secrets, the container job no Sonatype/GPG ones):
+
+- `DOCKER_USERNAME`
+- `DOCKER_API_TOKEN`
+
+The GHCR push needs no secret at all; it authenticates with the run's own `GITHUB_TOKEN`.
+
 **Permissions:** a called workflow can only **downgrade** the `GITHUB_TOKEN` permissions it
 receives from the calling job, never elevate them, and it cannot make a permission
 conditional on an input. The ceiling is the caller's workflow-level `permissions`, or the
 job-level `permissions` on the `uses:` job where one is set. Therefore:
 
 - `snapshot.yml`/`release.yml`/`docs.yml` declare `contents: read`, `pages: write`,
-  `id-token: write` at workflow level (for the docs deploy).
+  `id-token: write` at workflow level (for the docs deploy), plus `packages: write` in the
+  image-publishing repos (for the GHCR push, see §6.8).
 - The reusables declare the finer job-level permissions themselves.
 - Anything a reusable needs beyond `contents: read` that not every caller wants is a
   separate reusable the caller opts into with a job-level grant — `reusable-test-report.yml`
@@ -572,13 +763,15 @@ job-level `permissions` on the `uses:` job where one is set. Therefore:
 
 ## 10. Migration checklist (per project repo)
 
-1. **Prerequisite:** `eclipse-fennec/.github` contains the 5 reusables (§5). Choose `@<PIN>`
+1. **Prerequisite:** `eclipse-fennec/.github` contains the reusables of §5. Choose `@<PIN>`
    (the `.github` commit SHA, recommended).
 2. Create a branch in the project repo (repos are PR-only).
 3. Replace the old workflows with the thin callers from §6:
    - overwrite `build.yml`, `snapshot.yml`, `release.yml`, `docs.yml`, `scorecard.yml`,
      `dependency-review.yml`.
    - **delete** the standalone `license.yml` (the license gate now lives in `reusable-verify`).
+   - image repos: wire the `container` job(s) per §6.8 and **delete** the repo-local
+     `reusable-container.yml`.
 4. Ensure `dependabot.yml` exists (§6.7) — it is missing in `emf.odata`.
 5. Set `@<PIN>` in all 6 callers to the chosen SHA/tag.
 6. License config: keep the repo's existing `.licenserc.yaml` as-is (license config stays
@@ -588,14 +781,18 @@ job-level `permissions` on the `uses:` job where one is set. Therefore:
      The docs workflow is generic; the slug lives here.
    - `docs-site/package-lock.json` exists (npm cache path in the docs workflow).
    - Gradle tasks `build`, `testOSGi`, `perfTest`, `release` exist.
-   - All 5 secrets from §8 are set (org or repo level).
+   - All 5 secrets from §8 are set (org or repo level) — plus `DOCKER_USERNAME` and
+     `DOCKER_API_TOKEN` in image repos.
+   - image repos: the bndrun export tasks and the exported jar paths passed to
+     `reusable-release` still match the Dockerfile's `COPY content/…` lines.
 8. **`initial` branch decision:** the old emf.util workflows special-cased `initial`. In the new
    model `initial` is an ordinary feature branch (verify only). If it should not build, add it to
    `branches-ignore` in `build.yml`.
 9. Test order:
    - open a PR → only `verify` + `dependency-review` should run.
-   - merge to `snapshot` → `verify` → `release`(Snapshot) → `docs`.
-   - merge to `main` → `verify` → `release`(Central) → `docs`.
+   - merge to `snapshot` → `verify` → `release`(Snapshot) → `docs` (+ `container`, tag
+     `snapshot`).
+   - merge to `main` → `verify` → `release`(Central) → `docs` (+ `container`, tag `latest`).
 10. Verify branch protection on `main`/`snapshot` (PR-only, required checks = the `verify` jobs).
 
 ---
@@ -610,3 +807,7 @@ job-level `permissions` on the `uses:` job where one is set. Therefore:
 - **`initial` is no longer special-cased** (see §10.8).
 - `--scan` (Gradle build scan), which the old snapshot build set, is intentionally omitted so
   both release paths are identical. Add it as an input to `reusable-release.yml` if wanted.
+- **One image per `reusable-container.yml` call.** `model.atlas`' repo-local copy built both
+  variants in a single job; centrally each variant is its own job. It re-downloads the
+  `release-jars` artifact per variant (seconds) and buys parallel builds plus a failure that
+  stays local to one variant.
