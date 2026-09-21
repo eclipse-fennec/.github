@@ -85,6 +85,7 @@ Reusable workflows under `.github/workflows/`:
 | `reusable-docs.yml` | `workflow_call` | Shared-theme drift gate → VitePress build + GitHub Pages deploy | none |
 | `reusable-scorecard.yml` | `workflow_call` | OpenSSF Scorecard | none |
 | `reusable-dependency-review.yml` | `workflow_call` | Dependency Review (PR) | none |
+| `reusable-container.yml` | `workflow_call` | Builds one image variant from the jar the release job published and pushes it to Docker Hub + GHCR | Docker Hub |
 
 Shared docs assets under `docs-theme/`:
 
@@ -288,7 +289,47 @@ OpenSSF Scorecard analysis. `permissions: read-all` at workflow level; the analy
 
 ---
 
-### 5.6 `reusable-test-report.yml` (opt-in check runs)
+### 5.6 `reusable-container.yml`
+
+Builds and pushes **one image variant** for a repository that ships containers. It does not
+build the runtime artifact: it downloads the artifact `reusable-release.yml` uploaded in the
+same run (`artifact-paths` there, `artifact-name` here), so the image embeds exactly the jar
+that went to Maven beside it — an image built from a second, later build is an image nobody
+can map back to a release.
+
+What the caller keeps is the Dockerfile. What this workflow owns is the plumbing every repo
+would otherwise copy: find the jar inside an artifact whose layout depends on what was
+uploaded, read `Bundle-Version` off a bundle with the bnd CLI, stage the context, build for
+two platforms, tag twice and push to both registries.
+
+| Input | Default | Purpose |
+|---|---|---|
+| `docker-label` | — | Moving tag label: `snapshot` on the development branch, `latest` on a release |
+| `variant` | — | Image variant and tag prefix, e.g. `broker` |
+| `runtime-jar` | — | File name of the runtime jar inside the artifact |
+| `version-bundle-jar` | — | Bundle whose `Bundle-Version` becomes the immutable tag |
+| `docker-context` | — | Build context directory |
+| `staged-jar` | *runtime-jar* | Name the jar is staged under in `<context>/content/`, when the Dockerfile `COPY`s another |
+| `artifact-name` | `release-jars` | The artifact the release job uploaded |
+| `docker-image` | `docker.io/eclipsefennec/<repo>` | Docker Hub repository |
+| `ghcr-image` | `ghcr.io/<owner>/<repo>` | GHCR repository |
+| `platforms` | `linux/amd64,linux/arm64/v8` | Build platforms |
+| `bnd-version` | `7.2.1` | bnd CLI used to read the bundle version |
+
+Secrets: `DOCKER_USERNAME`, `DOCKER_API_TOKEN` (`secrets: inherit` in practice). The GHCR
+login uses the run's own `GITHUB_TOKEN`, so the caller's job needs `packages: write` — the
+workflow declares it.
+
+**Tags.** Two per registry, following the data.atlas scheme: `<variant>-<label>` moves, and
+`<variant>-<bundle version>` does not. A deployment pins the second; a demo follows the first.
+
+**One image, not one per option.** The variant is for images that are genuinely different
+artifacts. What a deployment switches on — a second transport, an exporter, a port — belongs
+in environment variables of one image, because two images that differ by a configuration are
+two images to build, scan, sign and keep in step. `emf.services` ships one broker image whose
+MQTT event transport sleeps until `DDSR_MQTT_URL` is set.
+
+### 5.7 `reusable-test-report.yml` (opt-in check runs)
 
 Downloads the `test-results-java-<version>` artifacts that `reusable-verify.yml` uploaded and
 publishes each JDK leg as its own **check run** on the commit ("Test results (Java 21)"), with
@@ -383,6 +424,28 @@ jobs:
     needs: release
     uses: eclipse-fennec/.github/.github/workflows/reusable-docs.yml@<PIN>
 ```
+
+A repository that ships a container adds one job per image variant, after the release job
+that produced the jar:
+
+```yaml
+  container-broker:
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: eclipse-fennec/.github/.github/workflows/reusable-container.yml@<PIN>
+    with:
+      docker-label: snapshot        # latest in release.yml
+      variant: broker
+      runtime-jar: broker.jar
+      version-bundle-jar: org.eclipse.fennec.services.broker.rest.jar
+      docker-context: docker/broker/
+    secrets: inherit
+```
+
+The release job has to upload the jars for it: `artifact-paths` on `reusable-release.yml`
+covers both the exported runtime jar and the bundle the version is read from.
 
 ### 6.3 `release.yml` (release branch → Maven Central)
 

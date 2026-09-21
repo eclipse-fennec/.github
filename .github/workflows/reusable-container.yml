@@ -1,0 +1,200 @@
+name: Reusable Container
+
+# Builds and pushes ONE container image variant to Docker Hub and GHCR.
+#
+# The runtime artifact is NOT rebuilt here: it is downloaded from the
+# artifact that reusable-release uploaded in the same run, so the image
+# embeds exactly the jar that was published to Maven beside it. What the
+# image is made of is the caller's Dockerfile; what this workflow owns is
+# the plumbing every repository would otherwise copy — find the jar,
+# read the version off a bundle, stage the context, build for two
+# platforms, tag and push.
+#
+# Tagging follows the data.atlas scheme: <variant>-<label> for the moving
+# tag and <variant>-<bundle version> for the immutable one, e.g.
+# broker-snapshot and broker-0.1.0.202609211530.
+on:
+  workflow_call:
+    inputs:
+      docker-label:
+        description: 'Moving docker tag label, e.g. snapshot or latest.'
+        type: string
+        required: true
+      variant:
+        description: 'Image variant and tag prefix, e.g. broker.'
+        type: string
+        required: true
+      runtime-jar:
+        description: 'File name of the runtime jar inside the release artifact, e.g. broker.jar.'
+        type: string
+        required: true
+      version-bundle-jar:
+        description: 'File name of the bundle jar whose Bundle-Version tags the image.'
+        type: string
+        required: true
+      docker-context:
+        description: 'Docker build context directory for this variant.'
+        type: string
+        required: true
+      staged-jar:
+        description: >-
+          Name the runtime jar is staged under inside <docker-context>/content/.
+          Defaults to runtime-jar, which is what a Dockerfile usually COPYs.
+        type: string
+        default: ''
+      artifact-name:
+        description: 'Workflow artifact holding the jars; the name reusable-release uploads under.'
+        type: string
+        default: 'release-jars'
+      docker-image:
+        description: 'Docker Hub repository. Default: eclipsefennec/<repository name>.'
+        type: string
+        default: ''
+      ghcr-image:
+        description: 'GHCR repository. Default: ghcr.io/<owner>/<repository name>.'
+        type: string
+        default: ''
+      platforms:
+        description: 'Target platforms for the build.'
+        type: string
+        default: 'linux/amd64,linux/arm64/v8'
+      bnd-version:
+        description: 'bnd CLI used to read Bundle-Version out of the bundle jar.'
+        type: string
+        default: '7.2.1'
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_API_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  LC_ALL: en_US.UTF-8
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  container:
+    name: Container Deploy (${{ inputs.variant }}-${{ inputs.docker-label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Git Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: release-jars
+
+      # upload-artifact stores files relative to the least common ancestor
+      # of the uploaded paths, so the archive layout depends on which paths
+      # were uploaded — locate the jars by name instead of assuming a prefix.
+      - name: Locate Release Jars
+        id: jars
+        run: |
+          ls -lR release-jars
+          RUNTIME_JAR=$(find release-jars -name '${{ inputs.runtime-jar }}' | head -1)
+          BUNDLE_JAR=$(find release-jars -name '${{ inputs.version-bundle-jar }}' | head -1)
+          test -f "$RUNTIME_JAR" && test -f "$BUNDLE_JAR"
+          echo "runtime-jar=${RUNTIME_JAR}" >> "$GITHUB_OUTPUT"
+          echo "bundle-jar=${BUNDLE_JAR}" >> "$GITHUB_OUTPUT"
+
+      - name: Install bnd
+        run: |
+          curl -Lk -o /tmp/biz.aQute.bnd.jar \
+            "https://repo1.maven.org/maven2/biz/aQute/bnd/biz.aQute.bnd/${{ inputs.bnd-version }}/biz.aQute.bnd-${{ inputs.bnd-version }}.jar"
+
+      - name: Extract Bundle Version
+        id: bundle_version
+        run: |
+          VERSION=$(java -jar /tmp/biz.aQute.bnd.jar select -h Bundle-Version \
+            "${{ steps.jars.outputs.bundle-jar }}" \
+            2>/dev/null | head -1)
+          echo "VERSION=${VERSION}"
+          test -n "${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # The two repositories default to the conventions of this
+      # organisation, so a caller states them only where it differs.
+      - name: Resolve image names
+        id: images
+        run: |
+          DOCKER_IMAGE='${{ inputs.docker-image }}'
+          GHCR_IMAGE='${{ inputs.ghcr-image }}'
+          test -n "${DOCKER_IMAGE}" || DOCKER_IMAGE="docker.io/eclipsefennec/${{ github.event.repository.name }}"
+          test -n "${GHCR_IMAGE}" || GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "docker=${DOCKER_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Docker content
+        run: |
+          STAGED='${{ inputs.staged-jar }}'
+          test -n "${STAGED}" || STAGED='${{ inputs.runtime-jar }}'
+          mkdir -p '${{ inputs.docker-context }}/content'
+          cp "${{ steps.jars.outputs.runtime-jar }}" "${{ inputs.docker-context }}/content/${STAGED}"
+          ls -lR '${{ inputs.docker-context }}/content'
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_API_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ inputs.docker-context }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |-
+            ${{ steps.images.outputs.docker }}:${{ inputs.variant }}-${{ inputs.docker-label }}
+            ${{ steps.images.outputs.docker }}:${{ inputs.variant }}-${{ steps.bundle_version.outputs.version }}
+            ${{ steps.images.outputs.ghcr }}:${{ inputs.variant }}-${{ inputs.docker-label }}
+            ${{ steps.images.outputs.ghcr }}:${{ inputs.variant }}-${{ steps.bundle_version.outputs.version }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image ${{ inputs.variant }}-${{ inputs.docker-label }}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Docker Hub | \`${{ steps.images.outputs.docker }}:${{ inputs.variant }}-${{ inputs.docker-label }}\` |"
+            echo "| GHCR | \`${{ steps.images.outputs.ghcr }}:${{ inputs.variant }}-${{ inputs.docker-label }}\` |"
+            echo "| Version tag | \`${{ inputs.variant }}-${{ steps.bundle_version.outputs.version }}\` |"
+            echo "| Platforms | \`${{ inputs.platforms }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
