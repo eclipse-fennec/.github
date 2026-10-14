@@ -123,7 +123,7 @@ jobs:
         # workflow cannot request a permission conditionally. Consumers that want
         # the check run call reusable-test-report.yml after this workflow.
         if: always() && steps.junit.outputs.found == 'true'
-        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
+        uses: mikepenz/action-junit-report@6ef3fdcfcd5f0b5d14df3e659ef19b8c6820f93d # v6.6.1
         with:
           # One pattern, not one per directory: every line of report_paths is
           # rendered as its own result, and the build/ one is empty in a bnd
