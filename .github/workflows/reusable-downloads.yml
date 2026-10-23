@@ -1,30 +1,15 @@
 name: Reusable Downloads
 
-# Publishes the contents of a workflow artifact to the Eclipse Foundation
-# download server, one directory per channel:
+# Publishes a workflow artifact to the Eclipse download server:
 #
 #   https://download.eclipse.org/fennec/<path>/<channel>/
 #
-# This is the step AFTER the Maven release, not part of it: reusable-release.yml
-# publishes to Maven Central/Snapshot and hands its outputs over as the
-# `release-jars` artifact (`artifact-paths`); this workflow only moves an
-# already built tree to the download server. What the tree is - a release OBR
-# (cnf/release) for baselining, a deflated p2 update site - is the caller's
-# business; anything that needs assembling (unzip, templating) happens in a
-# caller job that uploads the finished tree as its own artifact.
+# Runs after the Maven release and only uploads, it never builds. Typical
+# payloads: the release OBR (cnf/release) as baseline repository, or a p2
+# update site assembled by the caller.
 #
-# Mechanism (CBI best practice,
-# https://eclipse.dev/cbi/best-practices/github-actions/upload-to-downloads.eclipse.org/),
-# first proven in emf.m2x p2-downloads.yml: the org secrets SCP_USERNAME /
-# SCP_KEY / SCP_PASSPHRASE give the Fennec bot ssh access to
-# projects-storage.eclipse.org, which mounts /home/data/httpd/download.eclipse.org.
-# Plain rsync over ssh instead of the scp action the guide shows:
-#   - rsync --delete keeps the channel an exact mirror of the artifact; scp only
-#     ever adds, and snapshot jars carry a timestamp, so they would pile up.
-#   - the upload goes to <channel>.new and is swapped in with mv, so a client
-#     never sees a half-written directory.
-#   - the host key is pinned, and the passphrase is stripped only from a
-#     runner-local copy of the key so ssh/rsync run non-interactively.
+# Each channel is an exact mirror of the artifact (rsync --delete) and is
+# swapped in atomically, so clients never see a partial upload.
 on:
   workflow_call:
     inputs:
@@ -86,9 +71,8 @@ jobs:
   publish:
     name: rsync ${{ inputs.path }}/${{ inputs.channel }}
     runs-on: ubuntu-latest
-    # One upload per target directory at a time, so the .new/.old swap of two
-    # runs is never interleaved. Job level, not workflow level: a caller that
-    # declares the same group at workflow level would deadlock against itself.
+    # One upload per target at a time. Job level: the same group at workflow
+    # level in a caller would deadlock.
     concurrency:
       group: downloads-${{ inputs.path }}-${{ inputs.channel }}
       cancel-in-progress: false
@@ -105,8 +89,7 @@ jobs:
           TARGET_PATH: ${{ inputs.path }}
           CHANNEL: ${{ inputs.channel }}
           SOURCE_DIR: ${{ inputs.source-dir }}
-        # path and channel end up in remote shell commands; keep them to plain
-        # path segments. source-dir only selects a local directory, same rule.
+        # The values end up in remote shell commands.
         run: |
           set -euo pipefail
           seg='[A-Za-z0-9][A-Za-z0-9._-]*'
@@ -148,8 +131,6 @@ jobs:
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$SCP_KEY" > ~/.ssh/downloads-deploy
-          # The key file lives in the runner's home for this job only and is
-          # removed in the last step.
           ssh-keygen -q -p -P "$SCP_PASSPHRASE" -N "" -f ~/.ssh/downloads-deploy
           # Pinned host keys of projects-storage.eclipse.org (ssh-keyscan, 2026-09-15).
           cat > ~/.ssh/known_hosts <<'KEYS'
@@ -173,7 +154,7 @@ jobs:
           set -euo pipefail
           base="${DOWNLOAD_ROOT}/${TARGET_PATH}"
           target="${base}/${CHANNEL}"
-          # A previous run that died mid-way may have left .new/.old behind.
+          # Clean up leftovers of an aborted run.
           ssh "$DOWNLOAD_HOST" "set -e; mkdir -p '${base}'; rm -rf '${target}.new' '${target}.old'"
           rsync -rlptz --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
             site/ "${DOWNLOAD_HOST}:${target}.new/"
