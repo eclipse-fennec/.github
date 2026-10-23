@@ -1,0 +1,211 @@
+name: Reusable Downloads
+
+# Publishes the contents of a workflow artifact to the Eclipse Foundation
+# download server, one directory per channel:
+#
+#   https://download.eclipse.org/fennec/<path>/<channel>/
+#
+# This is the step AFTER the Maven release, not part of it: reusable-release.yml
+# publishes to Maven Central/Snapshot and hands its outputs over as the
+# `release-jars` artifact (`artifact-paths`); this workflow only moves an
+# already built tree to the download server. What the tree is - a release OBR
+# (cnf/release) for baselining, a deflated p2 update site - is the caller's
+# business; anything that needs assembling (unzip, templating) happens in a
+# caller job that uploads the finished tree as its own artifact.
+#
+# Mechanism (CBI best practice,
+# https://eclipse.dev/cbi/best-practices/github-actions/upload-to-downloads.eclipse.org/),
+# first proven in emf.m2x p2-downloads.yml: the org secrets SCP_USERNAME /
+# SCP_KEY / SCP_PASSPHRASE give the Fennec bot ssh access to
+# projects-storage.eclipse.org, which mounts /home/data/httpd/download.eclipse.org.
+# Plain rsync over ssh instead of the scp action the guide shows:
+#   - rsync --delete keeps the channel an exact mirror of the artifact; scp only
+#     ever adds, and snapshot jars carry a timestamp, so they would pile up.
+#   - the upload goes to <channel>.new and is swapped in with mv, so a client
+#     never sees a half-written directory.
+#   - the host key is pinned, and the passphrase is stripped only from a
+#     runner-local copy of the key so ssh/rsync run non-interactively.
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: >-
+          Workflow artifact whose contents become the channel directory, e.g.
+          release-jars (reusable-release with artifact-paths: cnf/release).
+        type: string
+        required: true
+      path:
+        description: >-
+          Directory below /fennec/ on the download server that holds all
+          channels, e.g. fennec.bnd.libraries/release or m2x/ocl/p2.
+        type: string
+        required: true
+      channel:
+        description: 'Last path segment, e.g. snapshot, latest or a release version.'
+        type: string
+        required: true
+      source-dir:
+        description: >-
+          Subdirectory inside the artifact to publish instead of its root, e.g.
+          cnf/release when release-jars also carries other paths. Empty
+          publishes the whole artifact.
+        type: string
+        default: ''
+      verify-files:
+        description: >-
+          Whitespace separated files, relative to the channel directory, that
+          must answer HTTP 200 after the upload, e.g. "index.xml" or
+          "p2.index content.jar artifacts.jar". Empty checks the directory itself.
+        type: string
+        default: ''
+    outputs:
+      url:
+        description: 'Public URL of the published channel directory, with trailing slash.'
+        value: ${{ jobs.publish.outputs.url }}
+    secrets:
+      SCP_USERNAME:
+        required: true
+      SCP_KEY:
+        required: true
+      SCP_PASSPHRASE:
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DOWNLOAD_HOST: projects-storage.eclipse.org
+  DOWNLOAD_ROOT: /home/data/httpd/download.eclipse.org/fennec
+  DOWNLOAD_URL: https://download.eclipse.org/fennec
+
+jobs:
+  publish:
+    name: rsync ${{ inputs.path }}/${{ inputs.channel }}
+    runs-on: ubuntu-latest
+    # One upload per target directory at a time, so the .new/.old swap of two
+    # runs is never interleaved. Job level, not workflow level: a caller that
+    # declares the same group at workflow level would deadlock against itself.
+    concurrency:
+      group: downloads-${{ inputs.path }}-${{ inputs.channel }}
+      cancel-in-progress: false
+    outputs:
+      url: ${{ steps.verify.outputs.url }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Validate inputs
+        env:
+          TARGET_PATH: ${{ inputs.path }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        # path and channel end up in remote shell commands; keep them to plain
+        # path segments. source-dir only selects a local directory, same rule.
+        run: |
+          set -euo pipefail
+          seg='[A-Za-z0-9][A-Za-z0-9._-]*'
+          if [[ ! "$TARGET_PATH" =~ ^${seg}(/${seg})*$ ]] || [[ "$TARGET_PATH" == *..* ]]; then
+            echo "::error::path '$TARGET_PATH' must be relative segments below /fennec/"; exit 1
+          fi
+          if [[ ! "$CHANNEL" =~ ^${seg}$ ]] || [[ "$CHANNEL" == *..* ]]; then
+            echo "::error::channel '$CHANNEL' is not a plain path segment"; exit 1
+          fi
+          if [ -n "$SOURCE_DIR" ] && { [[ ! "$SOURCE_DIR" =~ ^${seg}(/${seg})*$ ]] || [[ "$SOURCE_DIR" == *..* ]]; }; then
+            echo "::error::source-dir '$SOURCE_DIR' must be a relative path inside the artifact"; exit 1
+          fi
+
+      - name: Download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifact
+
+      - name: Select content
+        env:
+          SOURCE_DIR: ${{ inputs.source-dir }}
+        run: |
+          set -euo pipefail
+          src="artifact${SOURCE_DIR:+/$SOURCE_DIR}"
+          [ -d "$src" ] || { echo "::error::'${SOURCE_DIR}' not found in the artifact"; find artifact -maxdepth 3 -type d; exit 1; }
+          mv "$src" site
+          count=$(find site -type f | wc -l)
+          echo "${count} files to publish:"; find site -type f | sort
+          [ "$count" -gt 0 ] || { echo "::error::artifact is empty"; exit 1; }
+
+      - name: Set up ssh
+        env:
+          SCP_USERNAME: ${{ secrets.SCP_USERNAME }}
+          SCP_KEY: ${{ secrets.SCP_KEY }}
+          SCP_PASSPHRASE: ${{ secrets.SCP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SCP_KEY" > ~/.ssh/downloads-deploy
+          # The key file lives in the runner's home for this job only and is
+          # removed in the last step.
+          ssh-keygen -q -p -P "$SCP_PASSPHRASE" -N "" -f ~/.ssh/downloads-deploy
+          # Pinned host keys of projects-storage.eclipse.org (ssh-keyscan, 2026-09-15).
+          cat > ~/.ssh/known_hosts <<'KEYS'
+          projects-storage.eclipse.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAsn6PO2Uemsr7wIUu5x0RnlRcuK36D2sbmYNe2LSKdb
+          projects-storage.eclipse.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBAOUQ8p0E/Ib3uchk+6wEZ8UtBHTBvyI2E+eA/sOXajLQPKP0XIbVyECy8x5OmrrlvOYs+LxxniGJ69UIjiYZqM=
+          KEYS
+          cat > ~/.ssh/config <<CONF
+          Host ${DOWNLOAD_HOST}
+            User ${SCP_USERNAME}
+            IdentityFile ~/.ssh/downloads-deploy
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+          CONF
+
+      - name: Upload and swap in
+        env:
+          TARGET_PATH: ${{ inputs.path }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          base="${DOWNLOAD_ROOT}/${TARGET_PATH}"
+          target="${base}/${CHANNEL}"
+          # A previous run that died mid-way may have left .new/.old behind.
+          ssh "$DOWNLOAD_HOST" "set -e; mkdir -p '${base}'; rm -rf '${target}.new' '${target}.old'"
+          rsync -rlptz --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+            site/ "${DOWNLOAD_HOST}:${target}.new/"
+          ssh "$DOWNLOAD_HOST" "set -e; cd '${base}'; \
+            if [ -d '${CHANNEL}' ]; then mv '${CHANNEL}' '${CHANNEL}.old'; fi; \
+            mv '${CHANNEL}.new' '${CHANNEL}'; rm -rf '${CHANNEL}.old'; \
+            echo 'published:'; ls -la '${CHANNEL}'"
+
+      - name: Verify over HTTP
+        id: verify
+        env:
+          TARGET_PATH: ${{ inputs.path }}
+          CHANNEL: ${{ inputs.channel }}
+          VERIFY_FILES: ${{ inputs.verify-files }}
+        run: |
+          set -euo pipefail
+          url="${DOWNLOAD_URL}/${TARGET_PATH}/${CHANNEL}/"
+          # Split on whitespace without globbing; empty checks the directory.
+          read -r -a files <<< "${VERIFY_FILES//$'\n'/ }"
+          [ ${#files[@]} -gt 0 ] || files=("")
+          for f in "${files[@]}"; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -L "${url}${f}")
+            echo "${code}  ${url}${f}"
+            [ "$code" = "200" ] || { echo "::error::${url}${f} -> HTTP ${code}"; exit 1; }
+          done
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Published to download.eclipse.org"
+            echo ""
+            echo "${url}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove ssh key
+        if: always()
+        run: rm -rf ~/.ssh
