@@ -11,11 +11,11 @@ workflows that go into each project repo.
 
 ---
 
-## 0. Migration status (as of 2026-09-08)
+## 0. Migration status (as of 2026-10-23)
 
 | Repo | State |
 |---|---|
-| `eclipse-fennec/.github` | Seven reusables implemented: verify, test-report, release, docs, scorecard, dependency-review and — new, not yet in a release tag — `reusable-container.yml` (§5.7). Latest release: `v1.3.0` (`2a98ad6`), moving tag `v1` points at it. Adding the container workflow is a new optional reusable, so it goes out as a **minor** bump (`v1.4.0`) per §4.1, followed by re-pointing `v1` (§4.2). |
+| `eclipse-fennec/.github` | Eight reusables implemented: verify, test-report, release, docs, scorecard, dependency-review, container (§5.7) and — new, not yet in a release tag — `reusable-downloads.yml` (§5.8). Latest release: `v1.4.0` (`5b25efa`), moving tag `v1` points at it. The downloads workflow is a new optional reusable, so it goes out as a **minor** bump (`v1.5.0`) per §4.1, followed by re-pointing `v1` (§4.2). |
 | `fennec-model.atlas` | **First consumer, validated.** Branch `ci/reusable-workflows` (tip `f1f8376`) is fully green: license gate + Gradle 9.6.1/JDK 25 build + `testOSGi` + bndrun export checks (run 30546108930). Thin callers: `build.yml` (verify-only), `snapshot.yml`/`release.yml` (verify → release with `do-release` false/true, `publish-java-version: '25'`, exports via `extra-gradle-tasks`, jars via `artifact-paths` → repo-local `reusable-container.yml` builds the container images from the `release-jars` artifact, docker only after the Maven publish). Pinned to `eclipse-fennec/.github@43722f4`. |
 | `event.atlas`, `model.atlas`, `data.atlas`, `dcat.atlas` | **Migration to the central `reusable-container.yml` in review** — one PR per repo, each swapping the `uses:` and deleting the repo-local copy: event.atlas#52, model.atlas#270, data.atlas#9, dcat.atlas#50 (tracking issues event.atlas#51, model.atlas#269, data.atlas#8, dcat.atlas#49). All four pin the merge commit of #43 and are waiting on #44 plus the `v1.4.0` tag before merge. Input mapping per repo in §5.7, wiring in §6.8. |
 | `emf.util`, `emf.odata` | Not yet migrated — follow the checklist in §10. |
@@ -87,6 +87,7 @@ Reusable workflows under `.github/workflows/`:
 | `reusable-scorecard.yml` | `workflow_call` | OpenSSF Scorecard | none |
 | `reusable-dependency-review.yml` | `workflow_call` | Dependency Review (PR) | none |
 | `reusable-container.yml` | `workflow_call` | Docker image build + multi-arch push to Docker Hub and GHCR, from the `release-jars` artifact | Docker Hub |
+| `reusable-downloads.yml` | `workflow_call` | rsync an artifact (release OBR, p2 update site) to `download.eclipse.org/fennec/<path>/<channel>/` — runs **after** the Maven release | `SCP_*` |
 
 Shared docs assets under `docs-theme/`:
 
@@ -403,13 +404,67 @@ Consumer values for the repos that currently carry a repo-local copy of this wor
 | `data.atlas` | 2 (`file`, `atlas`) | `docker-context: docker/dataatlas` / `docker/dataatlas-atlas`, `runtime-jar: dataatlas.runtime_docker.jar` / `dataatlas.runtime_docker_atlas.jar` (Dockerfiles COPY the variant name, so no `runtime-jar-target`) |
 | `dcat.atlas` | 1 | `prepare-command: ./gradlew --no-daemon :docker:dcatatlas:prepareDocker`, `version-jar: org.eclipse.fennec.dcat.atlas.api.jar`, no `runtime-dir` (the image carries only the jar) |
 
+### 5.8 `reusable-downloads.yml`
+
+Publishes the contents of a workflow artifact to the Eclipse Foundation download server, one
+directory per channel:
+
+```
+https://download.eclipse.org/fennec/<path>/<channel>/
+```
+
+**Separate from the Maven release on purpose.** `reusable-release.yml` publishes to Maven
+Central/Snapshot and hands its outputs over as the `release-jars` artifact; this workflow only
+moves an already built tree to the download server. It never builds and receives no
+Sonatype/GPG secrets, the release job no `SCP_*` ones. Use cases:
+
+- the **release OBR** (`cnf/release`) — the exact bundles of the last release, as a stable
+  baseline repository for bnd baselining (#55);
+- a deflated **p2 update site** (first done in `emf.m2x`, `fennec/m2x/ocl/p2/<channel>/`).
+
+Whatever needs assembling — unzipping a p2 jar, templating an `index.html` — happens in a caller
+job that uploads the finished tree as its own artifact. The release OBR needs nothing: passing
+`artifact-paths: cnf/release` to `reusable-release.yml` already yields an artifact whose root is
+the OBR (`index.xml` plus the jars it references relatively), because `upload-artifact` roots a
+single directory at that directory.
+
+Inputs:
+
+| Input | Default | Purpose |
+|---|---|---|
+| `artifact-name` | required | Artifact whose contents become the channel directory, e.g. `release-jars`. |
+| `path` | required | Directory below `/fennec/` that holds all channels, e.g. `fennec.bnd.libraries/release`, `m2x/ocl/p2`. |
+| `channel` | required | Last path segment: `snapshot`, `latest` or a release version. |
+| `source-dir` | `''` | Subdirectory inside the artifact to publish instead of its root, e.g. `cnf/release` when `release-jars` carries other paths too. |
+| `verify-files` | `''` | Whitespace separated files below the channel that must answer HTTP 200 after the upload, e.g. `index.xml`. Empty checks the directory itself. |
+
+Secrets: `SCP_USERNAME`, `SCP_KEY`, `SCP_PASSPHRASE` (org secrets provided by the Eclipse
+Foundation via `.eclipsefdn`). Output: `url` of the published channel directory.
+
+Mechanism, per the [CBI best practice](https://eclipse.dev/cbi/best-practices/github-actions/upload-to-downloads.eclipse.org/)
+but with plain `rsync` over ssh instead of the scp action:
+
+- `rsync --delete` keeps the channel an exact mirror of the artifact — scp only adds, and
+  snapshot jars carry a timestamp, so they would pile up;
+- the upload goes to `<channel>.new` and is swapped in with `mv`, so clients never see a
+  half-written directory;
+- the host key of `projects-storage.eclipse.org` is pinned; the passphrase is stripped only
+  from a runner-local copy of the key, which is deleted at the end of the job;
+- `path` and `channel` are validated as plain path segments (they end up in remote shell
+  commands), and uploads to the same `path`/`channel` are serialised by a **job-level**
+  concurrency group.
+
+A version archive next to the moving channel is simply a second call with
+`channel: <version>`.
+
 ---
 
 ## 6. Consumer workflows (into each project repo)
 
 `@<PIN>` = SHA (recommended) or `v1`. `secrets: inherit` forwards repo/org secrets only to the
 called reusable, and a reusable only ever receives the secrets it declares: `reusable-release.yml`
-the Sonatype/GPG ones, `reusable-container.yml` the Docker Hub ones, while verify and docs
+the Sonatype/GPG ones, `reusable-container.yml` the Docker Hub ones, `reusable-downloads.yml`
+the `SCP_*` ones, while verify and docs
 receive **no** credentials at all (credential scoping is preserved).
 
 ### 6.1 `build.yml` (feature branches + PR)
@@ -682,6 +737,38 @@ And a repo that stages its context with Gradle (`dcat.atlas`):
 The repo-local `reusable-container.yml` is **deleted** in the same PR; `secrets: inherit`
 forwards `DOCKER_USERNAME`/`DOCKER_API_TOKEN` exactly as it did before.
 
+### 6.9 Download server publishing (release OBR, p2)
+
+A job after `release`, `needs: release`, nothing else changes. Release OBR for baselining
+(`release.yml`; the release run populates `cnf/release` through `-releaserepo`):
+
+```yaml
+  release:
+    needs: verify
+    uses: eclipse-fennec/.github/.github/workflows/reusable-release.yml@<PIN>
+    with:
+      do-release: true
+      artifact-paths: cnf/release
+    secrets: inherit
+  release-obr:
+    needs: release
+    uses: eclipse-fennec/.github/.github/workflows/reusable-downloads.yml@<PIN>
+    with:
+      artifact-name: release-jars
+      path: <repo-name>/release
+      channel: latest
+      verify-files: index.xml
+    secrets: inherit
+```
+
+The baseline repository is then `https://download.eclipse.org/fennec/<repo-name>/release/latest/index.xml`.
+A repo that also hands other jars downstream lists `cnf/release` in `artifact-paths` next to them;
+the artifact is then rooted at the common ancestor, and `source-dir: cnf/release` picks the OBR.
+
+A p2 update site needs an assemble job in between (unzip the p2 jar, drop `META-INF`, render the
+landing page), which uploads the finished tree as e.g. `p2-site` and calls the reusable with
+`artifact-name: p2-site`, `path: m2x/ocl/p2`, `verify-files: p2.index content.jar artifacts.jar`.
+
 ---
 
 ## 7. License configuration (`.licenserc.yaml`) — OPEN PROPOSAL, not implemented
@@ -734,6 +821,13 @@ secrets, the container job no Sonatype/GPG ones):
 - `DOCKER_API_TOKEN`
 
 The GHCR push needs no secret at all; it authenticates with the run's own `GITHUB_TOKEN`.
+
+Repos that publish to `download.eclipse.org` (§5.8, §6.9) use the org secrets the Eclipse
+Foundation provides for the Fennec bot, again only in that one job:
+
+- `SCP_USERNAME`
+- `SCP_KEY`
+- `SCP_PASSPHRASE`
 
 **Permissions:** a called workflow can only **downgrade** the `GITHUB_TOKEN` permissions it
 receives from the calling job, never elevate them, and it cannot make a permission
