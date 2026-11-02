@@ -54,7 +54,6 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [emf.osgi-mcp](https://github.com/eclipse-fennec/emf.osgi-mcp) | MCP OSGi whiteboard using EMF models as structured output. |
 | [common.models](https://github.com/eclipse-fennec/common.models) | Common EMF models (Ecore models). |
 | [fennec.models](https://github.com/eclipse-fennec/fennec.models) | Fennec-specific EMF models (e.g. compliance models). |
-| [model.metadata](https://github.com/eclipse-fennec/model.metadata) | Common model metadata framework. |
 | [camel](https://github.com/eclipse-fennec/camel) | EMF Apache Camel whiteboard integration. |
 | [fennec.bnd.libraries](https://github.com/eclipse-fennec/fennec.bnd.libraries) | Fennec workspace and project libraries. |
 
@@ -97,7 +96,7 @@ flowchart BT
   end
   subgraph java["☕ Java / OSGi Core"]
     fennec_bnd_libraries["fennec.bnd.libraries"]; emf_osgi["emf.osgi"]; emf_m2x["emf.m2x"]; emf_codec["emf.codec"]; common_models["common.models"]; fennec_models["fennec.models"]
-    model_metadata["model.metadata"]; emf_persistence_jpa["emf.persistence-jpa"]; emf_util["emf.util"]; emf_search["emf.search"]; emf_odata["emf.odata"]
+    emf_persistence_jpa["emf.persistence-jpa"]; emf_util["emf.util"]; emf_search["emf.search"]; emf_odata["emf.odata"]
     emf_ogc_features["emf.ogc.features"]; emf_osgi_mcp["emf.osgi-mcp"]; emf_services["emf.services"]; camel["camel"]; emf_editors["emf.editors"]; emf_codegen_maven["emf.codegen-maven"]
   end
   subgraph ts["🌐 TypeScript Stack"]
@@ -112,7 +111,6 @@ flowchart BT
   emf_m2x --> emf_osgi
   common_models --> emf_osgi
   fennec_models --> emf_osgi
-  model_metadata --> emf_osgi
   camel --> emf_osgi
   emf_codec --> emf_m2x
   emf_codec --> common_models
