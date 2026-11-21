@@ -44,6 +44,7 @@ Java/OSGi core, and a TypeScript stack that brings EMF and OCL to the browser.
 | [emf.util](https://github.com/eclipse-fennec/emf.util) | Utilities and commons for Fennec EMF OSGi. |
 | [emf.codec](https://github.com/eclipse-fennec/emf.codec) | Jackson 3 based EMF serializer / de-serializer. |
 | [emf.odata](https://github.com/eclipse-fennec/emf.odata) | OData protocol support for EMF models. |
+| [emf.jakarta.rest](https://github.com/eclipse-fennec/emf.jakarta.rest) | Dynamic Jakarta REST based on dynamic EMF models. |
 | [emf.ogc.features](https://github.com/eclipse-fennec/emf.ogc.features) | OGC API – Features implementation based on EMF. |
 | [emf.services](https://github.com/eclipse-fennec/emf.services) | EMF-based, OSGi-inspired distributed service registry framework. |
 | [emf.m2x](https://github.com/eclipse-fennec/emf.m2x) | EMF validation, transformation and generation. |
